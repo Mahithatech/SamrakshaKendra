@@ -1,0 +1,4 @@
+﻿ecord_id,year,week,reporting_start_date,reporting_end_date,state,district,disease,cases,deaths,outbreak_status,source,source_url
+AS/KAM/2025/24/997,2025,24,2025-06-09,2025-06-15,Assam,Kamrup Metro,Japanese Encephalitis,15,0,Under Surveillance,IDSP Weekly Outbreak Report,https://idsp.mohfw.gov.in/WriteReadData/l892s/40497724221754048530.pdf
+AS/KAR/2025/24/998,2025,24,2025-06-09,2025-06-15,Assam,Karimganj,Typhoid,7,0,Under Surveillance,IDSP Weekly Outbreak Report,https://idsp.mohfw.gov.in/WriteReadData/l892s/40497724221754048530.pdf
+AS/KOK/2025/24/999,2025,24,2025-06-09,2025-06-15,Assam,Kokrajhar,Fever with Rash,6,0,Under Surveillance,IDSP Weekly Outbreak Report,https://idsp.mohfw.gov.in/WriteReadData/l892s/40497724221754048530.pdf

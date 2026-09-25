@@ -1,0 +1,32 @@
+[
+  {
+    "report_id": "CR-0001",
+    "submitted_at": "2026-09-26 01:38",
+    "reporter_name": "Community User",
+    "contact": "",
+    "state": "Karnataka",
+    "district": "Bengaluru urban",
+    "report_type": "Unusual illness",
+    "disease_or_symptoms": "fever with rash",
+    "people_affected": 1,
+    "severity": "Moderate",
+    "description": "most cases",
+    "status": "Pending Review",
+    "source": "Community"
+  },
+  {
+    "report_id": "CR-0002",
+    "submitted_at": "2026-09-26 01:41",
+    "reporter_name": "Community User",
+    "contact": "",
+    "state": "Karnataka",
+    "district": "Bengaluru urban",
+    "report_type": "Unusual illness",
+    "disease_or_symptoms": "fever with rash",
+    "people_affected": 1,
+    "severity": "Moderate",
+    "description": "most cases",
+    "status": "Pending Review",
+    "source": "Community"
+  }
+]
