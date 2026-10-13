@@ -1,0 +1,12 @@
+
+# Python virtual environment
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+
+# React generated files
+frontend-react/node_modules/
+frontend-react/dist/
+
+# Local backup files
+*.bak

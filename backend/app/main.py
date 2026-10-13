@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 
@@ -6,6 +7,7 @@ from app.models import Hospital
 
 from app.disease_routes import router as disease_router
 from app.idsp_routes import router as idsp_router
+from app.advanced_routes import router as advanced_router
 
 
 app = FastAPI(
@@ -16,7 +18,16 @@ app = FastAPI(
     ),
     version="1.0.0"
 )
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():
@@ -120,5 +131,5 @@ def get_hospitals(
 # ============================================================
 
 app.include_router(disease_router)
-
 app.include_router(idsp_router)
+app.include_router(advanced_router)

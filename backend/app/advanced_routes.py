@@ -1,0 +1,288 @@
+"""Drop-in public-data, anomaly, ICA, and WebSocket routes.
+
+Copy this file and its sibling service files into the existing ``backend/app`` package.
+It expects ``IDSPSurveillance`` fields documented in INTEGRATION.md.
+"""
+from __future__ import annotations
+
+import csv
+import io
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from .anomaly_service import detect_case_anomalies
+from .database import get_db
+from .ica_service import ICAInputError, run_ica_analysis
+from .models import IDSPSurveillance
+from .websocket_manager import manager
+
+router = APIRouter(tags=["Public Data and Advanced Analytics"])
+
+
+def _filtered_query(
+    db: Session,
+    *,
+    state: str | None = None,
+    district: str | None = None,
+    disease: str | None = None,
+    year: int | None = None,
+):
+    query = db.query(IDSPSurveillance)
+    if state and state.strip():
+        query = query.filter(IDSPSurveillance.state.ilike(f"%{state.strip()}%"))
+    if district and district.strip():
+        query = query.filter(IDSPSurveillance.district.ilike(f"%{district.strip()}%"))
+    if disease and disease.strip():
+        query = query.filter(IDSPSurveillance.disease.ilike(f"%{disease.strip()}%"))
+    if year is not None:
+        query = query.filter(IDSPSurveillance.year == year)
+    return query
+
+
+def _serialise(row: IDSPSurveillance) -> dict[str, Any]:
+    def iso(value):
+        return value.isoformat() if value is not None and hasattr(value, "isoformat") else value
+
+    return {
+        "record_id": row.record_id,
+        "year": row.year,
+        "week": row.week,
+        "reporting_start_date": iso(row.reporting_start_date),
+        "reporting_end_date": iso(row.reporting_end_date),
+        "state": row.state,
+        "district": row.district,
+        "disease": row.disease,
+        "cases": int(row.cases or 0),
+        "deaths": int(row.deaths or 0),
+        "outbreak_status": row.outbreak_status,
+        "source": row.source,
+        "source_url": row.source_url,
+    }
+
+
+def _records_for_analysis(db: Session) -> list[dict[str, Any]]:
+    return [
+        {
+            "year": row.year,
+            "week": row.week,
+            "state": row.state,
+            "district": row.district,
+            "disease": row.disease,
+            "cases": row.cases,
+            "deaths": row.deaths,
+        }
+        for row in db.query(IDSPSurveillance).all()
+    ]
+
+
+@router.get("/public/surveillance", summary="Browse public aggregate surveillance records")
+def public_surveillance(
+    state: str | None = None,
+    district: str | None = None,
+    disease: str | None = None,
+    year: int | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = _filtered_query(db, state=state, district=district, disease=disease, year=year)
+    total = query.count()
+    rows = (
+        query.order_by(
+            IDSPSurveillance.year.desc(),
+            IDSPSurveillance.week.desc(),
+            IDSPSurveillance.state.asc(),
+            IDSPSurveillance.disease.asc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "items": [_serialise(row) for row in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "pages": (total + page_size - 1) // page_size,
+        "data_note": "Aggregate surveillance records only; source availability and completeness may vary.",
+    }
+
+
+@router.get("/public/surveillance/summary", summary="Summary statistics for public surveillance data")
+def public_surveillance_summary(
+    state: str | None = None,
+    district: str | None = None,
+    disease: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    filtered = _filtered_query(db, state=state, district=district, disease=disease, year=year)
+    total_records = filtered.count()
+    total_cases = filtered.with_entities(func.coalesce(func.sum(IDSPSurveillance.cases), 0)).scalar() or 0
+    total_deaths = filtered.with_entities(func.coalesce(func.sum(IDSPSurveillance.deaths), 0)).scalar() or 0
+    states_count = filtered.with_entities(func.count(func.distinct(IDSPSurveillance.state))).scalar() or 0
+    disease_count = filtered.with_entities(func.count(func.distinct(IDSPSurveillance.disease))).scalar() or 0
+
+    top_states_rows = (
+        filtered.with_entities(IDSPSurveillance.state, func.coalesce(func.sum(IDSPSurveillance.cases), 0).label("cases"))
+        .group_by(IDSPSurveillance.state)
+        .order_by(func.sum(IDSPSurveillance.cases).desc())
+        .limit(8)
+        .all()
+    )
+    top_diseases_rows = (
+        filtered.with_entities(IDSPSurveillance.disease, func.coalesce(func.sum(IDSPSurveillance.cases), 0).label("cases"))
+        .group_by(IDSPSurveillance.disease)
+        .order_by(func.sum(IDSPSurveillance.cases).desc())
+        .limit(8)
+        .all()
+    )
+    trend_rows = (
+        filtered.with_entities(
+            IDSPSurveillance.year,
+            IDSPSurveillance.week,
+            func.coalesce(func.sum(IDSPSurveillance.cases), 0).label("cases"),
+        )
+        .group_by(IDSPSurveillance.year, IDSPSurveillance.week)
+        .order_by(IDSPSurveillance.year.desc(), IDSPSurveillance.week.desc())
+        .limit(16)
+        .all()
+    )
+    weekly_trend = [
+        {"period": f"{row.year}-W{int(row.week):02d}", "year": row.year, "week": row.week, "cases": int(row.cases or 0)}
+        for row in reversed(trend_rows)
+    ]
+    return {
+        "total_records": int(total_records),
+        "total_cases": int(total_cases),
+        "total_deaths": int(total_deaths),
+        "states_count": int(states_count),
+        "diseases_count": int(disease_count),
+        "weekly_trend": weekly_trend,
+        "top_states": [{"name": row.state or "Unknown", "cases": int(row.cases or 0)} for row in top_states_rows],
+        "top_diseases": [{"name": row.disease or "Unknown", "cases": int(row.cases or 0)} for row in top_diseases_rows],
+        "data_note": "Summary of records currently loaded into this installation; not a claim of exhaustive national coverage.",
+    }
+
+
+@router.get("/public/surveillance/export.csv", summary="Download filtered public aggregate data as CSV")
+def export_public_surveillance(
+    state: str | None = None,
+    district: str | None = None,
+    disease: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    rows = _filtered_query(db, state=state, district=district, disease=disease, year=year).order_by(
+        IDSPSurveillance.year.desc(), IDSPSurveillance.week.desc()
+    ).limit(10000).all()
+    buffer = io.StringIO()
+    columns = [
+        "record_id", "year", "week", "reporting_start_date", "reporting_end_date",
+        "state", "district", "disease", "cases", "deaths", "outbreak_status", "source", "source_url",
+    ]
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(_serialise(row))
+    buffer.seek(0)
+    headers = {"Content-Disposition": 'attachment; filename="samraksha_surveillance.csv"'}
+    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv; charset=utf-8", headers=headers)
+
+
+@router.get("/analytics/anomalies", summary="Screen historical records for unusually high case counts")
+def historical_anomalies(db: Session = Depends(get_db)):
+    records = _records_for_analysis(db)
+    anomalies = detect_case_anomalies(records)
+    return {
+        "method": "Trailing median + robust MAD",
+        "count": len(anomalies),
+        "items": anomalies,
+        "caution": "Screening results require public-health review; they are not official outbreak declarations.",
+    }
+
+
+@router.post("/analytics/anomalies/run", summary="Run screening and broadcast genuine-data screening events")
+async def run_anomaly_screening(db: Session = Depends(get_db)):
+    anomalies = detect_case_anomalies(_records_for_analysis(db))
+    sent = 0
+    for anomaly in anomalies[:20]:
+        event = {
+            "event_id": str(uuid.uuid4()),
+            "type": "historical_anomaly_screening",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            **anomaly,
+            "is_synthetic": False,
+        }
+        sent += await manager.broadcast(event)
+    return {
+        "count": len(anomalies),
+        "broadcast_events": min(len(anomalies), 20),
+        "delivered_messages": sent,
+        "items": anomalies,
+        "caution": "Automated screening only; review findings before taking any action.",
+    }
+
+
+@router.post("/analytics/demo-anomaly", summary="Broadcast a synthetic anomaly for demonstration only")
+async def generate_demo_anomaly():
+    """Send a demo-only event. It is intentionally never written to PostgreSQL."""
+    event = {
+        "event_id": str(uuid.uuid4()),
+        "type": "demo_anomaly",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "severity": "HIGH",
+        "state": "DEMO STATE",
+        "district": "DEMO DISTRICT",
+        "disease": "Synthetic demonstration signal",
+        "year": datetime.now(timezone.utc).year,
+        "week": int(datetime.now(timezone.utc).strftime("%V")),
+        "cases": 185,
+        "baseline_median": 20,
+        "mad_score": None,
+        "method": "Synthetic test event",
+        "source": "synthetic_demo",
+        "is_synthetic": True,
+        "message": "DEMO ONLY: artificial case spike generated to test live notifications. Not a real outbreak or surveillance record.",
+    }
+    delivered = await manager.broadcast(event)
+    return {"message": "Synthetic demo event broadcast. No surveillance/database rows were changed.", "delivered_clients": delivered, "event": event}
+
+
+@router.get("/analytics/ica", summary="Experimental ICA on weekly disease-count signals")
+def ica_analysis(
+    components: int = Query(default=2, ge=2, le=5),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = run_ica_analysis(_records_for_analysis(db), n_components=components)
+    except ICAInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"ICA could not be completed with current data: {exc}") from exc
+    return result
+
+
+@router.websocket("/ws/alerts")
+async def live_alerts(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        await websocket.send_json({
+            "type": "connection_ready",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "message": "Connected to Samraksha Kendra live alert stream.",
+        })
+        while True:
+            message = await websocket.receive_text()
+            if message.strip().lower() in {"ping", "heartbeat"}:
+                await websocket.send_json({"type": "pong", "created_at": datetime.now(timezone.utc).isoformat()})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await manager.disconnect(websocket)
