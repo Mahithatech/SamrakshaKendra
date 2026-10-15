@@ -1,0 +1,13 @@
+{
+  "generated_at_utc": "2026-10-13T19:42:57+00:00",
+  "source_pdf_url": "https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week1_1788853592.pdf",
+  "source_index_url": "https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php",
+  "input_csv": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_staging_2026_w01.csv",
+  "output_csv": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_week1_source_reviewed.csv",
+  "source_reviewed_core_rows": 29,
+  "unmatched_or_duplicate_record_ids": false,
+  "rows_with_reporting_date_blank_due_source_schema": 2,
+  "narrative_comments_included": false,
+  "database_modified": false,
+  "note": "Core fields were transcribed/reconciled against the official NCDC Week 1 PDF. Keep as staging; obtain supervisor/source review before operational use. The PDF is a weekly outbreak report, not a continuously updating case-level feed."
+}
