@@ -10,3 +10,10 @@ frontend-react/dist/
 
 # Local backup files
 *.bak
+
+# Local environment secrets
+.env
+.env.*
+!.env.example
+backend/.env
+frontend-react/.env
