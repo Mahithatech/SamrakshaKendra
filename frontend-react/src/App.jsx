@@ -1,10 +1,11 @@
-import React from "react";
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '');
 const navItems = [
   { id: 'overview', label: 'Overview', glyph: '◫' },
   { id: 'history', label: 'Historical data', glyph: '▤' },
+  { id: 'signals', label: 'Global signals', glyph: '↗' },
+  { id: 'india-reports', label: 'India reports', glyph: '⌂' },
   { id: 'anomalies', label: 'Anomaly detection', glyph: '⌁' },
   { id: 'ica', label: 'ICA lab', glyph: '◉' },
 ];
@@ -24,6 +25,13 @@ async function api(path, options = {}) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat('en-IN').format(Number(value || 0));
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Unavailable';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function Badge({ children, tone = 'neutral' }) {
@@ -122,6 +130,12 @@ export default function App() {
   const [wsStatus, setWsStatus] = useState('connecting');
   const [liveEvents, setLiveEvents] = useState([]);
   const [notice, setNotice] = useState('');
+  const [globalFeed, setGlobalFeed] = useState(null);
+  const [globalFeedLoading, setGlobalFeedLoading] = useState(false);
+  const [globalFeedError, setGlobalFeedError] = useState('');
+  const [indiaReports, setIndiaReports] = useState(null);
+  const [indiaReportsLoading, setIndiaReportsLoading] = useState(false);
+  const [indiaReportsError, setIndiaReportsError] = useState('');
 
   const filterParams = useMemo(() => {
     const p = new URLSearchParams();
@@ -153,6 +167,32 @@ export default function App() {
     setAnomalies(result.items || []);
   }, []);
 
+  const refreshGlobalSignals = useCallback(async (forceRefresh = false) => {
+    setGlobalFeedLoading(true);
+    setGlobalFeedError('');
+    try {
+      const result = await api(`/public/global-outbreaks?limit=25${forceRefresh ? '&force_refresh=true' : ''}`);
+      setGlobalFeed(result);
+    } catch (err) {
+      setGlobalFeedError(err.message || 'Could not load the WHO public feed.');
+    } finally {
+      setGlobalFeedLoading(false);
+    }
+  }, []);
+
+  const refreshIndiaReports = useCallback(async (forceRefresh = false) => {
+    setIndiaReportsLoading(true);
+    setIndiaReportsError('');
+    try {
+      const result = await api(`/public/india-outbreak-reports?limit=50${forceRefresh ? '&force_refresh=true' : ''}`);
+      setIndiaReports(result);
+    } catch (err) {
+      setIndiaReportsError(err.message || 'Could not load the official NCDC weekly-outbreak archive.');
+    } finally {
+      setIndiaReportsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -162,6 +202,20 @@ export default function App() {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [refreshSummary, refreshRecords, refreshAnomalies]);
+
+  useEffect(() => {
+    if (page !== 'signals') return undefined;
+    refreshGlobalSignals();
+    const refreshTimer = window.setInterval(() => refreshGlobalSignals(), 15 * 60 * 1000);
+    return () => window.clearInterval(refreshTimer);
+  }, [page, refreshGlobalSignals]);
+
+  useEffect(() => {
+    if (page !== 'india-reports') return undefined;
+    refreshIndiaReports();
+    const refreshTimer = window.setInterval(() => refreshIndiaReports(), 15 * 60 * 1000);
+    return () => window.clearInterval(refreshTimer);
+  }, [page, refreshIndiaReports]);
 
   useEffect(() => {
     let stopped = false;
@@ -229,7 +283,7 @@ export default function App() {
     </aside>
 
     <main className="main-content">
-      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {pageMeta.label.toUpperCase()}</div><h1>{page === 'overview' ? 'Public health overview' : pageMeta.label}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase()}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title="Clear all data filters">Reset filters</button></div></header>
+      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {pageMeta.label.toUpperCase()}</div><h1>{page === 'overview' ? 'Public health overview' : pageMeta.label}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'signals' ? 'View newly published official global outbreak notices.' : page === 'india-reports' ? 'Browse official Indian weekly outbreak reports.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase()}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title="Clear all data filters">Reset filters</button></div></header>
 
       {error && <div className="alert-banner error-banner"><strong>API issue</strong><span>{error}</span><span className="hint">Confirm FastAPI is running and the enhancement router has been included.</span></div>}
       {notice && <div className="alert-banner info-banner"><strong>Update</strong><span>{notice}</span><button className="close-notice" aria-label="Dismiss notice" onClick={() => setNotice('')}>×</button></div>}
@@ -254,6 +308,32 @@ export default function App() {
         </form></section>
         <section className="panel table-panel"><div className="panel-heading"><div><span className="eyebrow">RESULTS</span><h3>Surveillance records <span className="inline-count">{formatNumber(totalRecords)}</span></h3></div><a className="button button-outline" href={csvUrl}>↓ Export CSV</a></div>{recordsLoading ? <div className="loading-line"><span className="spinner"/> Loading records…</div> : records.length ? <div className="table-scroll"><table><thead><tr><th>Period</th><th>State / district</th><th>Disease</th><th>Cases</th><th>Deaths</th><th>Status</th><th>Source</th></tr></thead><tbody>{records.map((row) => <tr key={row.record_id || `${row.year}-${row.week}-${row.state}-${row.disease}`}><td><strong>{row.year}-W{String(row.week).padStart(2, '0')}</strong><small>{row.reporting_start_date || 'Date unavailable'}</small></td><td>{row.state || '—'}<small>{row.district || 'District not specified'}</small></td><td>{row.disease || '—'}</td><td className="number-cell">{formatNumber(row.cases)}</td><td className="number-cell">{formatNumber(row.deaths)}</td><td><Badge tone={/outbreak|alert/i.test(row.outbreak_status || '') ? 'warning' : 'neutral'}>{row.outbreak_status || 'Reported'}</Badge></td><td>{row.source_url ? <a className="source-link" href={row.source_url} target="_blank" rel="noreferrer">Source ↗</a> : <span className="muted">{row.source || '—'}</span>}</td></tr>)}</tbody></table></div> : <EmptyState title="No records matched" body="Try a broader state, district, disease or year filter."/>}<div className="pagination"><span className="muted small">Showing {records.length ? ((pageIndex-1)*30+1) : 0}–{Math.min(pageIndex*30,totalRecords)} of {formatNumber(totalRecords)}</span><div><button className="button button-quiet" disabled={pageIndex <= 1} onClick={() => setPageIndex((p) => Math.max(1, p-1))}>← Previous</button><span className="page-count">Page {pageIndex} / {pageCount}</span><button className="button button-quiet" disabled={pageIndex >= pageCount} onClick={() => setPageIndex((p) => Math.min(pageCount, p+1))}>Next →</button></div></div></section>
         <p className="data-disclaimer">CSV export is capped at 10,000 rows per request. This portal is intended for aggregate public-health awareness and research, not diagnosis or clinical decision-making.</p>
+      </>}
+
+      {page === 'signals' && <>
+        <section className="hero-compact signals-hero"><div><Badge tone="blue">OFFICIAL PUBLIC SOURCE</Badge><h2>Global outbreak intelligence</h2><p>Latest notices published by the World Health Organization (WHO). This feed refreshes periodically and shows publication updates; it is not a continuous or district-level case-count stream.</p></div><div className="signals-glyph">↗</div></section>
+        <section className="panel"><div className="panel-heading"><div><span className="eyebrow">EXTERNAL SOURCE FEED</span><h3>WHO Disease Outbreak News</h3><p className="muted small">Source: <a className="source-link" href="https://www.who.int/emergencies/disease-outbreak-news" target="_blank" rel="noreferrer">who.int ↗</a></p></div><div className="feed-actions"><Badge tone={globalFeed?.status === 'available' ? 'success' : globalFeed?.status === 'stale' ? 'warning' : 'neutral'}>{globalFeed?.status || (globalFeedLoading ? 'loading' : 'not loaded')}</Badge><button className="button button-outline" disabled={globalFeedLoading} onClick={() => refreshGlobalSignals(true)}>{globalFeedLoading ? 'Refreshing…' : 'Refresh feed'}</button></div></div>
+          {globalFeedError && <div className="feed-warning"><strong>Feed unavailable</strong><span>{globalFeedError} Your local IDSP historical dataset is still available.</span></div>}
+          {globalFeedLoading && !globalFeed && <div className="loading-line"><span className="spinner"/> Fetching official public notices…</div>}
+          {globalFeed?.warning && <p className="feed-warning-text">{globalFeed.warning}</p>}
+          <div className="feed-metadata"><span>Last checked: {formatDateTime(globalFeed?.last_checked_at)}</span><span>Last successful fetch: {formatDateTime(globalFeed?.last_successful_fetch_at)}</span><span>Auto-check: every 15 minutes while this page is open</span></div>
+          {globalFeed?.items?.length ? <div className="source-notice-list">{globalFeed.items.map((item) => <article className="source-notice" key={item.id}><div className="source-notice-meta"><Badge tone="blue">WHO NOTICE</Badge><span>{formatDateTime(item.publication_date)}</span></div><h3>{item.title}</h3><p>{item.summary}</p><a className="source-link" href={item.url} target="_blank" rel="noreferrer">Read official WHO report ↗</a></article>)}</div> : !globalFeedLoading ? <EmptyState title="No public notices available" body={globalFeed?.source_error || 'The WHO feed may be temporarily unavailable. Try Refresh feed later; historical IDSP data remains separate.'}/> : null}
+        </section>
+        <section className="notice-panel signals-notice"><strong>How to interpret this feed</strong><p>WHO publishes reports when qualifying public-health events are selected for public communication. Publication time does not mean the underlying event happened at that moment, and WHO says its Disease Outbreak News is not an exhaustive list of every event it responds to. Do not add these notices to Indian case totals or treat them as an automatic outbreak declaration.</p></section>
+      </>}
+
+
+      {page === 'india-reports' && <>
+        <section className="hero-compact india-reports-hero"><div><Badge tone="blue">OFFICIAL INDIAN SOURCE</Badge><h2>Indian outbreak report archive</h2><p>Browse official NCDC weekly outbreak PDFs compiled through India's Integrated Disease Surveillance Programme (IDSP). This catalogue refreshes periodically and links to official source reports.</p></div><div className="signals-glyph">⌂</div></section>
+        <section className="panel"><div className="panel-heading"><div><span className="eyebrow">PUBLIC SOURCE FEED</span><h3>NCDC Weekly Outbreak Reports</h3><p className="muted small">Source: <a className="source-link" href="https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php" target="_blank" rel="noreferrer">ncdc.mohfw.gov.in ↗</a></p></div><div className="feed-actions"><Badge tone={indiaReports?.status === 'available' ? 'success' : indiaReports?.status === 'stale' ? 'warning' : 'neutral'}>{indiaReports?.status || (indiaReportsLoading ? 'loading' : 'not loaded')}</Badge><button className="button button-outline" disabled={indiaReportsLoading} onClick={() => refreshIndiaReports(true)}>{indiaReportsLoading ? 'Refreshing…' : 'Refresh archive'}</button></div></div>
+          {indiaReportsError && <div className="feed-warning"><strong>Archive unavailable</strong><span>{indiaReportsError} Your existing IDSP historical records remain available.</span></div>}
+          {indiaReportsLoading && !indiaReports && <div className="loading-line"><span className="spinner"/> Fetching official NCDC report links…</div>}
+          {indiaReports?.warning && <p className="feed-warning-text">{indiaReports.warning}</p>}
+          <div className="feed-metadata"><span>Last checked: {formatDateTime(indiaReports?.last_checked_at)}</span><span>Last successful fetch: {formatDateTime(indiaReports?.last_successful_fetch_at)}</span><span>Auto-check: every 15 minutes while this page is open</span><span>{formatNumber(indiaReports?.count || 0)} catalogue entries</span></div>
+          {indiaReports?.items?.length ? <div className="source-notice-list">{indiaReports.items.map((item, index) => <article className="source-notice" key={item.url || `${item.year}-${item.week}-${index}`}><div className="source-notice-meta"><Badge tone="blue">{item.report_type === 'pdf' ? 'OFFICIAL REPORT' : 'ARCHIVE ENTRY'}</Badge><span>{item.year ? `Year ${item.year}` : 'Year shown on source page'}{item.week ? ` · Week ${item.week}` : ''}</span></div><h3>{item.title || 'NCDC weekly outbreak report'}</h3><p>{item.report_type === 'pdf' ? 'Official report document. Open the source to read the reporting period, reported disease alerts and state/UT information.' : 'Official IDSP archive entry. Open it to access the underlying week report if available.'}</p><a className="source-link" href={item.url} target="_blank" rel="noreferrer">{item.report_type === 'pdf' ? 'Open official NCDC report ↗' : 'Open official archive entry ↗'}</a></article>)}</div> : !indiaReportsLoading ? <EmptyState title="No report links discovered" body={indiaReports?.source_error || 'The archive may have changed or may be temporarily unavailable. Use the official IDSP archive link below; no case data has been fabricated or imported.'}/> : null}
+          <p className="method-note">Official archive: <a className="source-link" href={indiaReports?.source_url || 'https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php'} target="_blank" rel="noreferrer">Weekly Outbreaks · NCDC / IDSP ↗</a></p>
+        </section>
+        <section className="notice-panel"><strong>How to use these reports in the project</strong><p>This page discovers and links to official NCDC weekly outbreak reports; it does not automatically convert PDF tables into numeric case/death counts or modify the existing surveillance database. To expand the structured historical dataset, each report must be parsed and validated first. Missing numeric counts remain unknown, not zero. These weekly publication updates are not a continuous real-time case feed.</p></section>
       </>}
 
       {page === 'anomalies' && <>

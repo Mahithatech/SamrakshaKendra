@@ -8,8 +8,8 @@ from app.models import Hospital
 from app.disease_routes import router as disease_router
 from app.idsp_routes import router as idsp_router
 from app.advanced_routes import router as advanced_router
-
-
+from app.source_routes import router as source_router
+from app.india_reports_routes import router as india_reports_router
 app = FastAPI(
     title="Samraksha Kendra",
     description=(
@@ -133,3 +133,5 @@ def get_hospitals(
 app.include_router(disease_router)
 app.include_router(idsp_router)
 app.include_router(advanced_router)
+app.include_router(source_router)
+app.include_router(india_reports_router)
