@@ -1,0 +1,19 @@
+{
+  "generated_at_utc": "2026-10-13T19:26:12+00:00",
+  "source_index_url": "https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php",
+  "requested_years": [
+    2026
+  ],
+  "requested_weeks": [
+    1
+  ],
+  "reports_selected": 1,
+  "reports_downloaded": 1,
+  "candidate_rows_extracted_before_dedupe": 29,
+  "unique_candidate_rows": 29,
+  "candidate_rows_needing_review": 2,
+  "failures": [],
+  "csv_output": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_staging_2026_w01.csv",
+  "database_modified": false,
+  "warning": "Staging only. Verify each row against its source PDF before any database import. Blank numeric values are unknown, not zero."
+}

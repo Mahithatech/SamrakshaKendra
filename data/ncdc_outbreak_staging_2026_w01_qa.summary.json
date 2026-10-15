@@ -1,0 +1,46 @@
+{
+  "input_csv": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_staging_2026_w01.csv",
+  "qa_csv": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_staging_2026_w01_qa.csv",
+  "generated_at_utc": "2026-10-13T19:33:14Z",
+  "rows_examined": 29,
+  "rows_needing_review": 13,
+  "rows_without_automatic_flags_still_need_source_pdf_verification": 16,
+  "duplicate_record_ids": [],
+  "common_review_reasons": [
+    {
+      "reason": "disease text appears split across cells/lines; verify and repair from PDF",
+      "count": 6
+    },
+    {
+      "reason": "current_status is blank",
+      "count": 4
+    },
+    {
+      "reason": "reporting_date is blank or not a valid parsed date",
+      "count": 2
+    },
+    {
+      "reason": "state is blank; likely column alignment problem",
+      "count": 2
+    },
+    {
+      "reason": "cases is blank or not a non-negative integer",
+      "count": 2
+    },
+    {
+      "reason": "outbreak_start_date is blank or not a valid parsed date",
+      "count": 2
+    },
+    {
+      "reason": "state normalization suggestion: 'Maharasht ra' -> 'Maharashtra'; verify against PDF",
+      "count": 2
+    },
+    {
+      "reason": "state normalization suggestion: 'Chhattisga rh' -> 'Chhattisgarh'; verify against PDF",
+      "count": 1
+    }
+  ],
+  "database_modified": false,
+  "database_import_approved": false,
+  "policy": "No row is auto-approved. Compare every row against the official source PDF before import."
+}
