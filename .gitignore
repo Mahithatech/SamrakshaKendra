@@ -30,3 +30,4 @@ data/ncdc_auto_refresh.log
 data/ncdc_latest_candidates_2026*.csv
 data/ncdc_latest_candidates_2026*.json
 data/ncdc_outbreak_week1_review_candidate*
+data/ncdc_week1_approval_manifest.csv

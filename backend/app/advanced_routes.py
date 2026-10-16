@@ -365,11 +365,6 @@ def export_public_surveillance(
     "/analytics/anomalies",
     summary="Screen historical records for unusually high case counts",
 )
-
-@router.get(
-    "/analytics/anomalies",
-    summary="Screen historical records for unusually high case counts",
-)
 def historical_anomalies(
     min_history: int = Query(default=4, ge=2, le=4),
     db: Session = Depends(get_db),
