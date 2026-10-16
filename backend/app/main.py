@@ -6,9 +6,10 @@ import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import Base, engine, get_db
 from app.models import Hospital, IDSPSurveillance
 
 from app.disease_routes import router as disease_router
@@ -52,6 +53,39 @@ async def require_bearer_token(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     return response
+
+
+@app.on_event("startup")
+async def _initialize_database_schema():
+    # Create missing ORM tables; this does not delete existing tables or rows.
+    Base.metadata.create_all(bind=engine)
+
+    # Keep NCDC candidate staging separate from live surveillance records.
+    ddl = """
+    CREATE TABLE IF NOT EXISTS public.ncdc_outbreak_staging (
+        record_id TEXT PRIMARY KEY,
+        report_year INTEGER NOT NULL,
+        report_week INTEGER NOT NULL CHECK (report_week BETWEEN 1 AND 53),
+        state TEXT NOT NULL,
+        district TEXT NOT NULL,
+        disease TEXT NOT NULL,
+        cases INTEGER NULL CHECK (cases IS NULL OR cases >= 0),
+        deaths INTEGER NULL CHECK (deaths IS NULL OR deaths >= 0),
+        outbreak_start_date DATE NULL,
+        reporting_date DATE NULL,
+        current_status TEXT NULL,
+        comments_action_taken TEXT NULL,
+        source_url TEXT NOT NULL,
+        source_index_url TEXT NOT NULL,
+        extracted_at_utc TIMESTAMPTZ NULL,
+        source_validation_status TEXT NOT NULL,
+        source_validation_note TEXT NULL,
+        review_status TEXT NOT NULL DEFAULT 'pending_supervisor_review',
+        imported_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """
+    with engine.begin() as connection:
+        connection.execute(text(ddl))
 
 # Refresh official publication feeds on the server, even when nobody has the tab open.
 # These are public notices/report links, not continuous case-count feeds.
