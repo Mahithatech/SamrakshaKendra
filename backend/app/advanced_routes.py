@@ -2,6 +2,9 @@
 """Public-data, anomaly, ICA, and WebSocket routes for Samraksha Kendra."""
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 import csv
 import io
 import uuid
@@ -28,6 +31,7 @@ from .database import get_db
 from .ica_service import ICAInputError, run_ica_analysis
 from .models import IDSPSurveillance
 from .websocket_manager import manager
+from .auth_security import decode_access_token
 
 router = APIRouter(tags=["Public Data and Advanced Analytics"])
 
@@ -519,31 +523,36 @@ def ica_analysis(
 
 @router.websocket("/ws/alerts")
 async def live_alerts(websocket: WebSocket):
-    await manager.connect(websocket)
-
+    # Browser WebSocket APIs cannot set Authorization headers. Require the first
+    # message to authenticate so bearer tokens do not appear in URLs or proxy logs.
+    accepted_into_manager = False
+    await websocket.accept()
     try:
+        auth_message = await websocket.receive_json()
+        token = auth_message.get("token") if isinstance(auth_message, dict) and auth_message.get("type") == "authenticate" else None
+        if not token or not decode_access_token(str(token)):
+            await websocket.close(code=1008, reason="Authentication required")
+            return
+
+        await manager.connect(websocket, already_accepted=True)
+        accepted_into_manager = True
         await websocket.send_json(
             {
                 "type": "connection_ready",
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "message": (
-                    "Connected to Samraksha Kendra live alert stream."
-                ),
+                "message": "Authenticated connection to Samraksha Kendra live alert stream.",
             }
         )
-
         while True:
             message = await websocket.receive_text()
-
             if message.strip().lower() in {"ping", "heartbeat"}:
-                await websocket.send_json(
-                    {
-                        "type": "pong",
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-
+                await websocket.send_json({"type": "pong", "created_at": datetime.now(timezone.utc).isoformat()})
     except WebSocketDisconnect:
         pass
+    except Exception:
+        if not accepted_into_manager:
+            with suppress(Exception):
+                await websocket.close(code=1008, reason="Invalid authentication message")
     finally:
-        await manager.disconnect(websocket)
+        if accepted_into_manager:
+            await manager.disconnect(websocket)

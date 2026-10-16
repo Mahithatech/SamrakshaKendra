@@ -13,7 +13,7 @@ import csv
 import json
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 STATE_NAMES = [
@@ -97,7 +97,9 @@ def review_reasons(row: dict[str, str], duplicate_id: bool = False) -> tuple[lis
         if re.search(r"\d", value):
             reasons.append(f"{field} contains digits; check column alignment")
     disease = clean(row.get("disease", ""))
-    if FRAGMENT_RE.search(disease):
+    # These are complete disease names, not PDF-split words.
+    known_short_suffix_names = {"hepatitis a"}
+    if FRAGMENT_RE.search(disease) and disease.casefold() not in known_short_suffix_names:
         reasons.append("disease text appears split across cells/lines; verify and repair from PDF")
 
     cases = clean(row.get("cases", ""))
@@ -107,8 +109,16 @@ def review_reasons(row: dict[str, str], duplicate_id: bool = False) -> tuple[lis
     if deaths and not valid_int(deaths):
         reasons.append("deaths is not a non-negative integer")
 
+    validation_note = clean(row.get("validation_note", "")).casefold()
+    late_report_has_no_reporting_date = (
+        "previous weeks reported late" in validation_note
+        and "no reporting-date field is published" in validation_note
+    )
     for field in ("outbreak_start_date", "reporting_date"):
         value = clean(row.get(field, ""))
+        # A blank reporting date is allowed only when the source table does not publish it.
+        if field == "reporting_date" and not value and late_report_has_no_reporting_date:
+            continue
         if not valid_date(value):
             reasons.append(f"{field} is blank or not a valid parsed date")
 
@@ -172,7 +182,7 @@ def run(input_path: Path, output_path: Path | None = None) -> tuple[Path, Path]:
     summary = {
         "input_csv": str(input_path.resolve()),
         "qa_csv": str(output_path.resolve()),
-        "generated_at_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "rows_examined": len(rows),
         "rows_needing_review": flagged,
         "rows_without_automatic_flags_still_need_source_pdf_verification": len(rows) - flagged,

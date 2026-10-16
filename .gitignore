@@ -17,3 +17,16 @@ frontend-react/dist/
 !.env.example
 backend/.env
 frontend-react/.env
+/data/ncdc_report_review_queue.json
+!**/.env.example
+**/.venv/
+**/node_modules/
+**/dist/
+backups/
+*.log
+sk_staging_preview_patch/
+data/ncdc_auto_refresh_status.json
+data/ncdc_auto_refresh.log
+data/ncdc_latest_candidates_2026*.csv
+data/ncdc_latest_candidates_2026*.json
+data/ncdc_outbreak_week1_review_candidate*

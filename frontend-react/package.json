@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-simple-maps": "^5.0.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.0",

@@ -70,3 +70,12 @@ Use public, authorized, or properly de-identified data for demonstrations. Do no
 
 ### Project status
 This is a working prototype under development. Production deployment requires further validation of data quality, anomaly detection, access control, privacy, monitoring, and public-health workflows.
+
+## Reviewer upgrade: secured login and live source refresh
+
+- A single admin account is configured locally with `backend/setup_auth.py`. Passwords are hashed with Argon2; API access tokens expire after 45 minutes. There is no public registration.
+- HTTP API routes require a bearer token except the login route and API documentation. The WebSocket alerts stream authenticates its first message without putting the token in the URL.
+- The backend checks the WHO Disease Outbreak News publication feed and NCDC/IDSP weekly-report catalogue in the background every 15 minutes. `/system/source-status` reports source freshness and the structured surveillance row count.
+- Important limitation: external WHO notices and NCDC PDF links are publication data; they are **not automatically converted to numeric case/death rows**. The 246 structured surveillance rows remain unchanged until each new report is parsed, reconciled, validated and explicitly imported. Feed refresh time is not the same as the source publication time.
+- This is a local/reviewer prototype. For public deployment, use HTTPS, a production secret manager, persistent users/audit trails, and an external rate limiter.
+

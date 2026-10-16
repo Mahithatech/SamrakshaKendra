@@ -1,15 +1,24 @@
+import asyncio
+from contextlib import suppress
+from datetime import datetime, timezone
+
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Hospital
+from app.models import Hospital, IDSPSurveillance
 
 from app.disease_routes import router as disease_router
 from app.idsp_routes import router as idsp_router
 from app.advanced_routes import router as advanced_router
-from app.source_routes import router as source_router
-from app.india_reports_routes import router as india_reports_router
+from app.source_routes import router as source_router, public_global_outbreaks
+from app.india_reports_routes import public_india_outbreak_reports, router as india_reports_router
+from app.report_review_queue import router as report_review_queue_router, sync_ncdc_report_queue
+from app.staging_preview_routes import router as staging_preview_router
+from app.auth_security import decode_access_token
+from app.auth_routes import router as auth_router
 app = FastAPI(
     title="Samraksha Kendra",
     description=(
@@ -18,6 +27,65 @@ app = FastAPI(
     ),
     version="1.0.0"
 )
+
+# Authentication is enforced for every HTTP endpoint except login and API docs.
+_PUBLIC_HTTP_PATHS = {"/", "/auth/login", "/docs", "/openapi.json", "/redoc", "/favicon.ico"}
+
+@app.middleware("http")
+async def require_bearer_token(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or path in _PUBLIC_HTTP_PATHS or path.startswith("/docs/"):
+        response = await call_next(request)
+    else:
+        auth_header = request.headers.get("authorization", "")
+        scheme, _, token = auth_header.partition(" ")
+        claims = decode_access_token(token.strip()) if scheme.lower() == "bearer" and token.strip() else None
+        if not claims:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required. Sign in to continue."},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+# Refresh official publication feeds on the server, even when nobody has the tab open.
+# These are public notices/report links, not continuous case-count feeds.
+async def _source_refresh_loop():
+    while True:
+        try:
+            refresh_results = await asyncio.gather(
+                asyncio.to_thread(public_global_outbreaks, limit=50, force_refresh=True),
+                asyncio.to_thread(public_india_outbreak_reports, limit=100, force_refresh=True),
+                return_exceptions=True,
+            )
+            # Persist newly discovered official NCDC PDFs for human review; never import PDF counts here.
+            try:
+                india_result = refresh_results[1] if len(refresh_results) > 1 else None
+                if isinstance(india_result, dict):
+                    await asyncio.to_thread(sync_ncdc_report_queue, india_result)
+            except Exception:
+                # Discovery-queue failures must not stop the core API or later refreshes.
+                pass
+        except Exception:
+            # The source endpoints preserve last-known data and expose stale/unavailable status.
+            pass
+        await asyncio.sleep(15 * 60)
+
+@app.on_event("startup")
+async def _start_background_source_refresh():
+    app.state.source_refresh_task = asyncio.create_task(_source_refresh_loop())
+
+@app.on_event("shutdown")
+async def _stop_background_source_refresh():
+    task = getattr(app.state, "source_refresh_task", None)
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -130,8 +198,27 @@ def get_hospitals(
 # ROUTERS
 # ============================================================
 
+app.include_router(auth_router)
 app.include_router(disease_router)
 app.include_router(idsp_router)
 app.include_router(advanced_router)
 app.include_router(source_router)
 app.include_router(india_reports_router)
+app.include_router(report_review_queue_router)
+app.include_router(staging_preview_router)
+
+@app.get("/system/source-status", tags=["System status"], summary="Database and live-publication source freshness")
+def source_status(db: Session = Depends(get_db)):
+    who = public_global_outbreaks(limit=50, force_refresh=False)
+    india = public_india_outbreak_reports(limit=100, force_refresh=False)
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "structured_surveillance_records": db.query(IDSPSurveillance).count(),
+        "record_count_note": "This count includes structured surveillance rows only. WHO notices and NCDC report links are separate publication feeds and are not added to case totals.",
+        "refresh_interval_minutes": 15,
+        "sources": [
+            {"name": "WHO Disease Outbreak News", "status": who.get("status"), "items_available": who.get("count", 0), "last_checked_at": who.get("last_checked_at"), "last_successful_fetch_at": who.get("last_successful_fetch_at"), "source_url": who.get("source_url"), "warning": who.get("warning")},
+            {"name": "NCDC/IDSP weekly report catalogue", "status": india.get("status"), "items_available": india.get("count", 0), "last_checked_at": india.get("last_checked_at"), "last_successful_fetch_at": india.get("last_successful_fetch_at"), "source_url": india.get("source_url"), "warning": india.get("warning")},
+        ],
+    }
+
