@@ -17,5 +17,6 @@
       - key: SK_JWT_SECRET
         generateValue: true
       - key: SK_CORS_ORIGINS
-        value: http://localhost:5173,http://127.0.0.1:5173
+        value: https://samrakshakendra.onrender.com
+
 
