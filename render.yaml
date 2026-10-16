@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: samraksha-kendra-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SK_ADMIN_USERNAME
+        sync: false
+      - key: SK_ADMIN_PASSWORD_HASH
+        sync: false
+      - key: SK_JWT_SECRET
+        generateValue: true
+      - key: SK_CORS_ORIGINS
+        value: http://localhost:5173,http://127.0.0.1:5173

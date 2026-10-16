@@ -2,6 +2,7 @@ import asyncio
 from contextlib import suppress
 from datetime import datetime, timezone
 
+import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
@@ -89,8 +90,12 @@ async def _stop_background_source_refresh():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
+        origin.strip()
+        for origin in os.getenv(
+            "SK_CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173",
+        ).split(",")
+        if origin.strip()
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
