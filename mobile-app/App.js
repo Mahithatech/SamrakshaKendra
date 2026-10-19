@@ -19,6 +19,7 @@ import {
   parseSourceStatus,
   parseSummary,
   requestJSON,
+  extractAccessToken,
 } from './src/api.mjs';
 
 const API_BASE = normalizeApiBase(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL);
@@ -49,6 +50,11 @@ function StatCard({ label, value, accent = false }) {
 export default function App() {
   const [tab, setTab] = useState('overview');
   const [language, setLanguage] = useState('en');
+  const [token, setToken] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [summary, setSummary] = useState(null);
   const [hospitalCount, setHospitalCount] = useState(0);
   const [sources, setSources] = useState([]);
@@ -60,14 +66,50 @@ export default function App() {
   const [answerError, setAnswerError] = useState('');
   const t = COPY[language] || COPY.en;
 
+  const signIn = useCallback(async () => {
+    const username = loginUsername.trim();
+    if (!username || !loginPassword) {
+      setLoginError('Enter your username and password.');
+      return;
+    }
+    setLoginBusy(true);
+    setLoginError('');
+    try {
+      const payload = await requestJSON('/auth/login', {
+        method: 'POST',
+        body: { username, password: loginPassword },
+      }, fetch, API_BASE);
+      const accessToken = extractAccessToken(payload);
+      setToken(accessToken);
+      setLoginPassword('');
+      setLoginError('');
+    } catch (error) {
+      setLoginError(error?.message || 'Sign-in failed. Check your account details and try again.');
+    } finally {
+      setLoginBusy(false);
+    }
+  }, [loginUsername, loginPassword]);
+
+  const signOut = useCallback(() => {
+    setToken('');
+    setSummary(null);
+    setHospitalCount(0);
+    setSources([]);
+    setAnswer(null);
+    setAnswerError('');
+    setPageError('');
+    setTab('overview');
+  }, []);
+
   const refreshData = useCallback(async () => {
+    if (!token) return;
     setBusy(true);
     setPageError('');
     try {
       const [summaryData, hospitalData, sourceData] = await Promise.all([
-        requestJSON('/public/surveillance/summary', {}, fetch, API_BASE),
-        requestJSON('/hospitals/count', {}, fetch, API_BASE).catch(() => ({ count: 0 })),
-        requestJSON('/system/source-status', {}, fetch, API_BASE).catch(() => ({ sources: [] })),
+        requestJSON('/public/surveillance/summary', { token }, fetch, API_BASE),
+        requestJSON('/hospitals/count', { token }, fetch, API_BASE).catch(() => ({ count: 0 })),
+        requestJSON('/system/source-status', { token }, fetch, API_BASE).catch(() => ({ sources: [] })),
       ]);
       setSummary(parseSummary(summaryData));
       setHospitalCount(Number(hospitalData.count ?? hospitalData.total ?? 0) || 0);
@@ -77,9 +119,9 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [t.offline]);
+  }, [token, t.offline]);
 
-  useEffect(() => { refreshData(); }, [refreshData]);
+  useEffect(() => { if (token) refreshData(); }, [token, refreshData]);
 
   const ask = useCallback(async (value = question) => {
     let body;
@@ -89,19 +131,70 @@ export default function App() {
     setAnswerError('');
     setAnswerBusy(true);
     try {
-      const result = await requestJSON('/public/assistant/query', { method: 'POST', body }, fetch, API_BASE);
+      const result = await requestJSON('/public/assistant/query', { method: 'POST', body, token }, fetch, API_BASE);
       setAnswer(result);
     } catch (error) {
       setAnswerError(error?.message || t.error);
     } finally {
       setAnswerBusy(false);
     }
-  }, [question, language, t.error]);
+  }, [question, language, token, t.error]);
 
   const pickPrompt = (prompt) => {
     setQuestion(prompt);
     ask(prompt);
   };
+
+  if (!token) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <ScrollView contentContainerStyle={styles.loginContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.loginCard}>
+            <View style={styles.loginBrandRow}>
+              <View style={styles.logo}><Text style={styles.logoText}>SK</Text></View>
+              <Text style={styles.loginEyebrow}>PUBLIC HEALTH INTELLIGENCE</Text>
+            </View>
+            <Text style={styles.loginTitle}>Samraksha Kendra</Text>
+            <Text style={styles.loginHint}>Sign in with your existing authorized Samraksha Kendra account to load surveillance data and use the Evidence Assistant.</Text>
+            <Text style={styles.loginLabel}>Username</Text>
+            <TextInput
+              accessibilityLabel="Username"
+              value={loginUsername}
+              onChangeText={setLoginUsername}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="username"
+              placeholder="Enter username"
+              placeholderTextColor={COLORS.muted}
+              style={styles.loginInput}
+              returnKeyType="next"
+            />
+            <Text style={styles.loginLabel}>Password</Text>
+            <TextInput
+              accessibilityLabel="Password"
+              value={loginPassword}
+              onChangeText={setLoginPassword}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="password"
+              placeholder="Enter password"
+              placeholderTextColor={COLORS.muted}
+              style={styles.loginInput}
+              onSubmitEditing={signIn}
+              returnKeyType="go"
+            />
+            {!!loginError && <View style={styles.errorBox}><Text style={styles.errorText}>{loginError}</Text></View>}
+            <ActionButton onPress={signIn} disabled={loginBusy}>
+              {loginBusy ? 'Signing in…' : 'Sign in'}
+            </ActionButton>
+            <Text style={styles.loginFootnote}>Your password is sent only to the configured Samraksha Kendra API over HTTPS. It is not saved by this app.</Text>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -114,6 +207,7 @@ export default function App() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.languageRow}>
           {LANGS.map((item) => <Pressable key={item.code} accessibilityRole="button" onPress={() => setLanguage(item.code)} style={[styles.languageChip, language === item.code && styles.languageChipActive]}><Text style={[styles.languageText, language === item.code && styles.languageTextActive]}>{item.label}</Text></Pressable>)}
         </ScrollView>
+        <Pressable accessibilityRole="button" onPress={signOut} style={styles.signOutButton}><Text style={styles.signOutText}>Sign out</Text></Pressable>
       </View>
 
       <View style={styles.tabs}>
@@ -263,4 +357,15 @@ const styles = StyleSheet.create({
   statusText: { color: COLORS.green, fontSize: 10, fontWeight: '800' },
   footer: { marginTop: 18, paddingTop: 15, borderTopWidth: 1, borderTopColor: COLORS.border, gap: 3 },
   footerText: { fontSize: 10, color: '#8290A2', lineHeight: 15 },
+  loginContent: { flexGrow: 1, justifyContent: 'center', padding: 22, backgroundColor: COLORS.page },
+  loginCard: { backgroundColor: COLORS.card, borderColor: COLORS.border, borderWidth: 1, borderRadius: 20, padding: 22, gap: 12 },
+  loginBrandRow: { alignItems: 'center', gap: 9, marginBottom: 2 },
+  loginEyebrow: { color: COLORS.tealDark, fontSize: 9, fontWeight: '900', letterSpacing: 1.4, textAlign: 'center' },
+  loginTitle: { color: COLORS.text, fontWeight: '900', fontSize: 25, textAlign: 'center' },
+  loginHint: { color: COLORS.muted, fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 8 },
+  loginLabel: { color: COLORS.text, fontSize: 12, fontWeight: '800', marginBottom: -7 },
+  loginInput: { minHeight: 48, backgroundColor: '#FFFFFF', borderRadius: 11, paddingHorizontal: 13, paddingVertical: 11, borderColor: COLORS.border, borderWidth: 1, color: COLORS.text, fontSize: 14 },
+  loginFootnote: { color: COLORS.muted, fontSize: 10, lineHeight: 15, marginTop: 4 },
+  signOutButton: { alignSelf: 'flex-end', paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#334762', borderRadius: 99, marginTop: 10 },
+  signOutText: { color: '#FFFFFF', fontWeight: '800', fontSize: 11 },
 });
