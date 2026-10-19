@@ -263,3 +263,23 @@ def source_status(db: Session = Depends(get_db)):
         ],
     }
 
+# SK_AUTOMATED_INGESTION_PIPELINE_BEGIN
+# These admin routes are protected by the app's existing bearer-token middleware.
+from contextlib import asynccontextmanager as _sk_asynccontextmanager
+from app.pipeline_routes import router as pipeline_router
+from app.ingestion_pipeline import start_pipeline_worker as _sk_start_pipeline_worker, stop_pipeline_worker as _sk_stop_pipeline_worker
+app.include_router(pipeline_router)
+
+# Wrap, rather than replace, the existing FastAPI lifespan so pre-existing startup/shutdown hooks stay active.
+_sk_original_lifespan_context = app.router.lifespan_context
+@_sk_asynccontextmanager
+async def _sk_combined_lifespan(application):
+    async with _sk_original_lifespan_context(application):
+        await _sk_start_pipeline_worker()
+        try:
+            yield
+        finally:
+            await _sk_stop_pipeline_worker()
+app.router.lifespan_context = _sk_combined_lifespan
+# SK_AUTOMATED_INGESTION_PIPELINE_END
+
