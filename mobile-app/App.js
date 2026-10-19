@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import * as SecureStore from 'expo-secure-store';
 import {
   ActivityIndicator,
   Linking,
@@ -23,6 +24,7 @@ import {
 } from './src/api.mjs';
 
 const API_BASE = normalizeApiBase(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL);
+const SESSION_TOKEN_KEY = 'samraksha_kendra_access_token_v1';
 const LANGS = [
   { code: 'en', label: 'English' },
   { code: 'te', label: 'తెలుగు' },
@@ -51,6 +53,7 @@ export default function App() {
   const [tab, setTab] = useState('overview');
   const [language, setLanguage] = useState('en');
   const [token, setToken] = useState('');
+  const [sessionLoading, setSessionLoading] = useState(true);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
@@ -66,6 +69,22 @@ export default function App() {
   const [answerError, setAnswerError] = useState('');
   const t = COPY[language] || COPY.en;
 
+  // Restore only the access token from the OS-protected secure store. Never save the password.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const savedToken = await SecureStore.getItemAsync(SESSION_TOKEN_KEY);
+        if (active && savedToken) setToken(savedToken);
+      } catch {
+        // If secure storage cannot be read, show sign-in rather than failing to open the app.
+      } finally {
+        if (active) setSessionLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
   const signIn = useCallback(async () => {
     const username = loginUsername.trim();
     if (!username || !loginPassword) {
@@ -80,6 +99,7 @@ export default function App() {
         body: { username, password: loginPassword },
       }, fetch, API_BASE);
       const accessToken = extractAccessToken(payload);
+      await SecureStore.setItemAsync(SESSION_TOKEN_KEY, accessToken);
       setToken(accessToken);
       setLoginPassword('');
       setLoginError('');
@@ -90,7 +110,13 @@ export default function App() {
     }
   }, [loginUsername, loginPassword]);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback(async () => {
+    try {
+      await SecureStore.deleteItemAsync(SESSION_TOKEN_KEY);
+    } catch {
+      setLoginError('Could not clear the secure session. Please try signing out again.');
+      return;
+    }
     setToken('');
     setSummary(null);
     setHospitalCount(0);
@@ -144,6 +170,18 @@ export default function App() {
     setQuestion(prompt);
     ask(prompt);
   };
+
+  if (sessionLoading) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.navy} />
+        <View style={styles.loading}>
+          <ActivityIndicator size="large" color={COLORS.teal} />
+          <Text style={styles.muted}>Restoring secure session…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!token) {
     return (
