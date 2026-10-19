@@ -8,7 +8,10 @@ from typing import Any
 import jwt
 from fastapi import Header, HTTPException
 from pwdlib import PasswordHash
+from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 _password_hash = PasswordHash.recommended()
 TOKEN_MINUTES = 45
 

@@ -11,7 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.auth_security import TOKEN_MINUTES, create_access_token, require_auth, verify_password
+from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 _attempt_lock = threading.Lock()
 _attempts: dict[str, list[float]] = defaultdict(list)

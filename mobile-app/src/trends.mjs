@@ -46,3 +46,16 @@ export function aggregateDistrictTrends(records) {
   }
   return [...groups.values()].sort((a, b) => b.cases - a.cases || b.deaths - a.deaths || a.district.localeCompare(b.district));
 }
+
+
+/** Return matching IDSP report rows for a selected district, newest reporting date first. */
+export function getDistrictReportDetails(records, district, state) {
+  const expectedDistrict = safeText(district).toLocaleLowerCase();
+  const expectedState = safeText(state).toLocaleLowerCase();
+  if (!expectedDistrict || !expectedState || !Array.isArray(records)) return [];
+  return records
+    .filter((record) => safeText(record?.district).toLocaleLowerCase() === expectedDistrict
+      && safeText(record?.state).toLocaleLowerCase() === expectedState)
+    .slice()
+    .sort((a, b) => isoDate(b).localeCompare(isoDate(a)));
+}

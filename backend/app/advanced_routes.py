@@ -426,31 +426,29 @@ def historical_anomalies(
 
 @router.post(
     "/analytics/anomalies/run",
-    summary="Run screening and broadcast historical screening events",
+    summary="Persist anomaly screening events and deliver pending alerts",
 )
 async def run_anomaly_screening(db: Session = Depends(get_db)):
     records = _records_for_analysis(db)
     anomalies = detect_case_anomalies(records)
 
-    sent = 0
+    # Persist through the existing idempotent pipeline event store.
+    from .ingestion_pipeline import _persist_anomaly_events, emit_pending_events
 
-    for anomaly in anomalies[:20]:
-        event = {
-            "event_id": str(uuid.uuid4()),
-            "type": "historical_anomaly_screening",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            **anomaly,
-            "is_synthetic": False,
-        }
-        sent += await manager.broadcast(event)
+    events_created = _persist_anomaly_events(anomalies)
+    delivery = await emit_pending_events(limit=100)
 
     return {
         "count": len(anomalies),
-        "broadcast_events": min(len(anomalies), 20),
-        "delivered_messages": sent,
+        "events_created": events_created,
+        "pending_events_seen": delivery["pending_events_seen"],
+        "events_delivered": delivery["events_delivered"],
+        "delivered_messages": delivery["clients_delivered"],
         "items": anomalies,
         "caution": (
-            "Automated screening only. Review findings before taking action."
+            "Automated screening only. Review findings before taking action. "
+            "Delivery counts indicate connected clients, not confirmed receipt "
+            "or acknowledgement by a public-health authority."
         ),
     }
 

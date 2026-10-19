@@ -18,6 +18,14 @@ export function normalizeApiBase(value = DEFAULT_API_BASE_URL) {
   return candidate;
 }
 
+export function extractAccessToken(payload = {}) {
+  const token = payload.access_token || payload.token || payload.accessToken;
+  if (typeof token !== 'string' || token.trim().length === 0) {
+    throw new Error('Sign-in response did not include an access token.');
+  }
+  return token.trim();
+}
+
 export function normalizeQuestion(value) {
   const question = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (question.length < 1 || question.length > 400) {
@@ -58,6 +66,11 @@ export async function requestJSON(path, options = {}, fetchImpl = globalThis.fet
   const base = normalizeApiBase(baseUrl);
   const method = String(options.method || 'GET').toUpperCase();
   const headers = { Accept: 'application/json', ...(options.headers || {}) };
+  if (typeof options.token === 'string' && options.token.trim()) {
+    if (!headers.Authorization && !headers.authorization) {
+      headers.Authorization = `Bearer ${options.token.trim()}`;
+    }
+  }
   const init = { method, headers };
   if (options.body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -72,7 +85,9 @@ export async function requestJSON(path, options = {}, fetchImpl = globalThis.fet
   }
   if (!response.ok) {
     const detail = typeof data.detail === 'string' ? data.detail : `Request failed (HTTP ${response.status}).`;
-    throw new Error(detail);
+    const requestError = new Error(detail);
+    requestError.status = response.status;
+    throw requestError;
   }
   return data;
 }

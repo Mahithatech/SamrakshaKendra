@@ -15,6 +15,10 @@
     },
     "extra": {
       "apiBaseUrl": "https://samraksha-kendra-api.onrender.com"
-    }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-sharing"
+    ]
   }
 }

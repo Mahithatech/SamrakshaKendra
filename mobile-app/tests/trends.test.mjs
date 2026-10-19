@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateDistrictTrends, filterTrendRecords } from '../src/trends.mjs';
+import { aggregateDistrictTrends, filterTrendRecords, getDistrictReportDetails } from '../src/trends.mjs';
 
 const sample = [
   { district: 'Mysuru', state: 'Karnataka', disease: 'Chickenpox', cases: 51, deaths: 1, reporting_end_date: '2026-03-01', source_url: 'https://example.org/mysuru' },
@@ -47,4 +47,18 @@ test('handles missing, non-array, negative and invalid numbers safely', () => {
   assert.equal(result[0].cases, 0);
   assert.equal(result[0].deaths, 0);
   assert.equal(result[0].records, 1);
+});
+
+
+test('returns selected district reports newest first with case-insensitive matching', () => {
+  const result = getDistrictReportDetails(sample, 'mysuru', 'KARNATAKA');
+  assert.equal(result.length, 2);
+  assert.equal(result[0].reporting_end_date, '2026-03-08');
+  assert.equal(result[1].reporting_end_date, '2026-03-01');
+});
+
+test('district report details return an empty list for invalid inputs or unmatched districts', () => {
+  assert.deepEqual(getDistrictReportDetails(null, 'Mysuru', 'Karnataka'), []);
+  assert.deepEqual(getDistrictReportDetails(sample, '', 'Karnataka'), []);
+  assert.deepEqual(getDistrictReportDetails(sample, 'Mysuru', 'Tamil Nadu'), []);
 });

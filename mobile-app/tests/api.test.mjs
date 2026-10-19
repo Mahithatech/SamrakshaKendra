@@ -8,6 +8,7 @@ import {
   parseSummary,
   parseSourceStatus,
   requestJSON,
+  extractAccessToken,
 } from '../src/api.mjs';
 
 test('default API URL is the deployed Samraksha Kendra backend', () => {
@@ -62,4 +63,24 @@ test('requestJSON posts JSON and parses structured response', async () => {
 test('requestJSON surfaces server validation errors without credentials', async () => {
   const fakeFetch = async () => ({ ok: false, status: 422, text: async () => JSON.stringify({ detail: 'Question must contain 3–400 characters.' }) });
   await assert.rejects(() => requestJSON('/public/assistant/query', { method: 'POST', body: {} }, fakeFetch), /Question must contain/);
+});
+
+
+test('extracts an access token from supported login response fields', () => {
+  assert.equal(extractAccessToken({ access_token: 'abc' }), 'abc');
+  assert.equal(extractAccessToken({ token: 'xyz' }), 'xyz');
+  assert.equal(extractAccessToken({ accessToken: 'def' }), 'def');
+  assert.throws(() => extractAccessToken({}), /did not include an access token/);
+});
+
+test('requestJSON sends bearer token only when supplied', async () => {
+  let captured;
+  const fakeFetch = async (url, init) => {
+    captured = { url, init };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+  };
+  await requestJSON('/hospitals/count', { token: 'secure-token' }, fakeFetch, 'https://api.example.test');
+  assert.equal(captured.init.headers.Authorization, 'Bearer secure-token');
+  await requestJSON('/auth/login', { method: 'POST', body: { username: 'u', password: 'p' } }, fakeFetch, 'https://api.example.test');
+  assert.equal(captured.init.headers.Authorization, undefined);
 });
