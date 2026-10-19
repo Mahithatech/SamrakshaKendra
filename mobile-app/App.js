@@ -22,6 +22,7 @@ import {
   requestJSON,
   extractAccessToken,
 } from './src/api.mjs';
+import { aggregateDistrictTrends, filterTrendRecords } from './src/trends.mjs';
 
 const API_BASE = normalizeApiBase(process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL);
 const SESSION_TOKEN_KEY = 'samraksha_kendra_access_token_v1';
@@ -33,13 +34,14 @@ const LANGS = [
 ];
 
 const COPY = {
-  en: { overview: 'Overview', evidence: 'Evidence', sources: 'Sources', appTitle: 'Samraksha Kendra', eyebrow: 'PUBLIC HEALTH INTELLIGENCE', summary: 'Surveillance at a glance', totalRecords: 'Records', cases: 'Reported cases', deaths: 'Reported deaths', states: 'States / UTs', diseases: 'Disease labels', hospitals: 'Hospital directory', refresh: 'Refresh data', available: 'Available', unavailable: 'Unavailable', loading: 'Loading data…', offline: 'Could not load the API. Check your connection and retry.', noSources: 'No source status returned yet.', askTitle: 'Ask the evidence assistant', prompt: 'Ask about the loaded surveillance data…', send: 'Ask', asking: 'Checking data…', prompts: ['Summarize the surveillance dataset', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'Sources', disclaimer: 'Coverage note: answers reflect only records loaded in this installation. Not medical advice or an official outbreak declaration.', sourceWarning: 'Publication notices are not a continuous case-count feed.', emptyAnswer: 'Ask a question to get a source-grounded answer.', error: 'Something went wrong. Please retry.', recordsLine: 'records', casesLine: 'cases', deathsLine: 'deaths' },
-  te: { overview: 'సారాంశం', evidence: 'ఆధారాలు', sources: 'మూలాలు', appTitle: 'సంరక్ష కేంద్రం', eyebrow: 'ప్రజారోగ్య సమాచార వేదిక', summary: 'నిఘా సంక్షిప్త వివరాలు', totalRecords: 'రికార్డులు', cases: 'నివేదించిన కేసులు', deaths: 'నివేదించిన మరణాలు', states: 'రాష్ట్రాలు / UTలు', diseases: 'వ్యాధి పేర్లు', hospitals: 'ఆసుపత్రుల డైరెక్టరీ', refresh: 'డేటా రిఫ్రెష్', available: 'అందుబాటులో ఉంది', unavailable: 'అందుబాటులో లేదు', loading: 'డేటా లోడ్ అవుతోంది…', offline: 'API డేటా లోడ్ కాలేదు. కనెక్షన్ తనిఖీ చేసి మళ్లీ ప్రయత్నించండి.', noSources: 'మూలాల స్థితి ఇంకా అందుబాటులో లేదు.', askTitle: 'ఆధారాల సహాయకుడిని అడగండి', prompt: 'లోడ్ చేసిన నిఘా డేటా గురించి అడగండి…', send: 'అడగండి', asking: 'డేటా పరిశీలిస్తోంది…', prompts: ['నిఘా డేటా సారాంశం', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'మూలాలు', disclaimer: 'గమనిక: సమాధానాలు ఈ వ్యవస్థలో లోడ్ చేసిన రికార్డులకే పరిమితం. వైద్య సలహా లేదా అధికారిక ప్రకటన కాదు.', sourceWarning: 'ప్రచురణ నోటీసులు నిరంతర కేసుల ఫీడ్ కావు.', emptyAnswer: 'ఆధారాలతో సమాధానం పొందేందుకు ప్రశ్న అడగండి.', error: 'సమస్య ఏర్పడింది. మళ్లీ ప్రయత్నించండి.', recordsLine: 'రికార్డులు', casesLine: 'కేసులు', deathsLine: 'మరణాలు' },
-  kn: { overview: 'ಅವಲೋಕನ', evidence: 'ಆಧಾರ', sources: 'ಮೂಲಗಳು', appTitle: 'ಸಂರಕ್ಷ ಕೇಂದ್ರ', eyebrow: 'ಸಾರ್ವಜನಿಕ ಆರೋಗ್ಯ ಮಾಹಿತಿ', summary: 'ಒಂದು ನೋಟದಲ್ಲಿ ಮೇಲ್ವಿಚಾರಣೆ', totalRecords: 'ದಾಖಲೆಗಳು', cases: 'ವರದಿಯಾದ ಪ್ರಕರಣಗಳು', deaths: 'ವರದಿಯಾದ ಸಾವುಗಳು', states: 'ರಾಜ್ಯಗಳು / UTಗಳು', diseases: 'ರೋಗದ ಹೆಸರುಗಳು', hospitals: 'ಆಸ್ಪತ್ರೆ ಡೈರೆಕ್ಟರಿ', refresh: 'ಡೇಟಾ ರಿಫ್ರೆಶ್', available: 'ಲಭ್ಯವಿದೆ', unavailable: 'ಲಭ್ಯವಿಲ್ಲ', loading: 'ಡೇಟಾ ಲೋಡ್ ಆಗುತ್ತಿದೆ…', offline: 'API ಲೋಡ್ ಆಗಲಿಲ್ಲ. ಸಂಪರ್ಕ ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.', noSources: 'ಮೂಲ ಸ್ಥಿತಿ ಇನ್ನೂ ಲಭ್ಯವಿಲ್ಲ.', askTitle: 'ಸಾಕ್ಷ್ಯ ಸಹಾಯಕನನ್ನು ಕೇಳಿ', prompt: 'ಲೋಡ್ ಮಾಡಿದ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಬಗ್ಗೆ ಕೇಳಿ…', send: 'ಕೇಳಿ', asking: 'ಡೇಟಾ ಪರಿಶೀಲಿಸುತ್ತಿದೆ…', prompts: ['ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಸಾರಾಂಶ', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'ಮೂಲಗಳು', disclaimer: 'ಗಮನಿಸಿ: ಉತ್ತರಗಳು ಈ ವ್ಯವಸ್ಥೆಯಲ್ಲಿ ಲೋಡ್ ಮಾಡಿದ ದಾಖಲೆಗಳಿಗೆ ಮಾತ್ರ ಸೀಮಿತ. ವೈದ್ಯಕೀಯ ಸಲಹೆ ಅಥವಾ ಅಧಿಕೃತ ಘೋಷಣೆ ಅಲ್ಲ.', sourceWarning: 'ಪ್ರಕಟಣೆ ಸೂಚನೆಗಳು ನಿರಂತರ ಪ್ರಕರಣಗಳ ಫೀಡ್ ಅಲ್ಲ.', emptyAnswer: 'ಮೂಲಾಧಾರಿತ ಉತ್ತರಕ್ಕಾಗಿ ಪ್ರಶ್ನೆ ಕೇಳಿ.', error: 'ದೋಷ ಸಂಭವಿಸಿದೆ. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.', recordsLine: 'ದಾಖಲೆಗಳು', casesLine: 'ಪ್ರಕರಣಗಳು', deathsLine: 'ಸಾವುಗಳು' },
-  hi: { overview: 'अवलोकन', evidence: 'साक्ष्य', sources: 'स्रोत', appTitle: 'संरक्षा केंद्र', eyebrow: 'सार्वजनिक स्वास्थ्य जानकारी', summary: 'निगरानी एक नज़र में', totalRecords: 'रिकॉर्ड', cases: 'रिपोर्ट किए गए मामले', deaths: 'रिपोर्ट की गई मौतें', states: 'राज्य / केंद्र शासित प्रदेश', diseases: 'बीमारी लेबल', hospitals: 'अस्पताल निर्देशिका', refresh: 'डेटा रीफ़्रेश', available: 'उपलब्ध', unavailable: 'अनुपलब्ध', loading: 'डेटा लोड हो रहा है…', offline: 'API डेटा लोड नहीं हुआ। कनेक्शन जाँचकर पुनः प्रयास करें।', noSources: 'स्रोत स्थिति अभी उपलब्ध नहीं है।', askTitle: 'साक्ष्य सहायक से पूछें', prompt: 'लोड किए गए निगरानी डेटा के बारे में पूछें…', send: 'पूछें', asking: 'डेटा जाँचा जा रहा है…', prompts: ['निगरानी डेटासेट का सारांश', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'स्रोत', disclaimer: 'ध्यान दें: उत्तर केवल इस स्थापना में लोड रिकॉर्ड तक सीमित हैं। यह चिकित्सकीय सलाह या आधिकारिक प्रकोप घोषणा नहीं है।', sourceWarning: 'प्रकाशन सूचनाएँ निरंतर केस-काउंट फ़ीड नहीं हैं।', emptyAnswer: 'स्रोत-आधारित उत्तर के लिए प्रश्न पूछें।', error: 'समस्या हुई। कृपया फिर प्रयास करें।', recordsLine: 'रिकॉर्ड', casesLine: 'मामले', deathsLine: 'मौतें' },
+  en: { overview: 'Overview', evidence: 'Evidence', sources: 'Sources', appTitle: 'Samraksha Kendra', eyebrow: 'PUBLIC HEALTH INTELLIGENCE', summary: 'Surveillance at a glance', totalRecords: 'Records', cases: 'Reported cases', deaths: 'Reported deaths', states: 'States / UTs', diseases: 'Disease labels', hospitals: 'Hospital directory', refresh: 'Refresh data', available: 'Available', unavailable: 'Unavailable', loading: 'Loading data…', offline: 'Could not load the API. Check your connection and retry.', noSources: 'No source status returned yet.', askTitle: 'Ask the evidence assistant', prompt: 'Ask about the loaded surveillance data…', send: 'Ask', asking: 'Checking data…', prompts: ['Summarize the surveillance dataset', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'Sources', disclaimer: 'Coverage note: answers reflect only records loaded in this installation. Not medical advice or an official outbreak declaration.', sourceWarning: 'Publication notices are not a continuous case-count feed.', emptyAnswer: 'Ask a question to get a source-grounded answer.', error: 'Something went wrong. Please retry.', trends: 'Trends', trendTitle: 'District outbreak trends', trendHint: 'Explore the available IDSP reports. Filters apply to the records returned by the API.', diseaseFilter: 'Filter disease', stateFilter: 'Filter state', dateFrom: 'From date (YYYY-MM-DD)', dateTo: 'To date (YYYY-MM-DD)', refreshTrends: 'Refresh reports', clearFilters: 'Clear filters', recordsFound: 'Matching records', topDistricts: 'Districts with most reported cases', noTrendRecords: 'No records match these filters.', latestReport: 'Latest report', trendCoverage: 'Coverage note: rankings reflect only available reports, up to 500 records returned by the API. They are not a live or official outbreak declaration.', recordsLine: 'records', casesLine: 'cases', deathsLine: 'deaths' },
+  te: { overview: 'సారాంశం', evidence: 'ఆధారాలు', sources: 'మూలాలు', appTitle: 'సంరక్ష కేంద్రం', eyebrow: 'ప్రజారోగ్య సమాచార వేదిక', summary: 'నిఘా సంక్షిప్త వివరాలు', totalRecords: 'రికార్డులు', cases: 'నివేదించిన కేసులు', deaths: 'నివేదించిన మరణాలు', states: 'రాష్ట్రాలు / UTలు', diseases: 'వ్యాధి పేర్లు', hospitals: 'ఆసుపత్రుల డైరెక్టరీ', refresh: 'డేటా రిఫ్రెష్', available: 'అందుబాటులో ఉంది', unavailable: 'అందుబాటులో లేదు', loading: 'డేటా లోడ్ అవుతోంది…', offline: 'API డేటా లోడ్ కాలేదు. కనెక్షన్ తనిఖీ చేసి మళ్లీ ప్రయత్నించండి.', noSources: 'మూలాల స్థితి ఇంకా అందుబాటులో లేదు.', askTitle: 'ఆధారాల సహాయకుడిని అడగండి', prompt: 'లోడ్ చేసిన నిఘా డేటా గురించి అడగండి…', send: 'అడగండి', asking: 'డేటా పరిశీలిస్తోంది…', prompts: ['నిఘా డేటా సారాంశం', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'మూలాలు', disclaimer: 'గమనిక: సమాధానాలు ఈ వ్యవస్థలో లోడ్ చేసిన రికార్డులకే పరిమితం. వైద్య సలహా లేదా అధికారిక ప్రకటన కాదు.', sourceWarning: 'ప్రచురణ నోటీసులు నిరంతర కేసుల ఫీడ్ కావు.', emptyAnswer: 'ఆధారాలతో సమాధానం పొందేందుకు ప్రశ్న అడగండి.', error: 'సమస్య ఏర్పడింది. మళ్లీ ప్రయత్నించండి.', trends: 'ధోరణులు', trendTitle: 'జిల్లాల వ్యాప్తి ధోరణులు', trendHint: 'అందుబాటులో ఉన్న IDSP నివేదికలను పరిశీలించండి. ఫిల్టర్లు API అందించిన రికార్డులపై వర్తిస్తాయి.', diseaseFilter: 'వ్యాధి ఫిల్టర్', stateFilter: 'రాష్ట్ర ఫిల్టర్', dateFrom: 'తేదీ నుంచి (YYYY-MM-DD)', dateTo: 'తేదీ వరకు (YYYY-MM-DD)', refreshTrends: 'నివేదికలను రిఫ్రెష్ చేయండి', clearFilters: 'ఫిల్టర్లు తొలగించండి', recordsFound: 'సరిపోలిన రికార్డులు', topDistricts: 'ఎక్కువగా నివేదించిన కేసుల జిల్లాలు', noTrendRecords: 'ఈ ఫిల్టర్లకు రికార్డులు లేవు.', latestReport: 'చివరి నివేదిక', trendCoverage: 'గమనిక: ర్యాంకింగ్ API ఇచ్చిన గరిష్ఠంగా 500 అందుబాటులో ఉన్న నివేదికలపైనే ఆధారపడుతుంది. ఇది ప్రత్యక్ష లేదా అధికారిక వ్యాప్తి ప్రకటన కాదు.', recordsLine: 'రికార్డులు', casesLine: 'కేసులు', deathsLine: 'మరణాలు' },
+  kn: { overview: 'ಅವಲೋಕನ', evidence: 'ಆಧಾರ', sources: 'ಮೂಲಗಳು', appTitle: 'ಸಂರಕ್ಷ ಕೇಂದ್ರ', eyebrow: 'ಸಾರ್ವಜನಿಕ ಆರೋಗ್ಯ ಮಾಹಿತಿ', summary: 'ಒಂದು ನೋಟದಲ್ಲಿ ಮೇಲ್ವಿಚಾರಣೆ', totalRecords: 'ದಾಖಲೆಗಳು', cases: 'ವರದಿಯಾದ ಪ್ರಕರಣಗಳು', deaths: 'ವರದಿಯಾದ ಸಾವುಗಳು', states: 'ರಾಜ್ಯಗಳು / UTಗಳು', diseases: 'ರೋಗದ ಹೆಸರುಗಳು', hospitals: 'ಆಸ್ಪತ್ರೆ ಡೈರೆಕ್ಟರಿ', refresh: 'ಡೇಟಾ ರಿಫ್ರೆಶ್', available: 'ಲಭ್ಯವಿದೆ', unavailable: 'ಲಭ್ಯವಿಲ್ಲ', loading: 'ಡೇಟಾ ಲೋಡ್ ಆಗುತ್ತಿದೆ…', offline: 'API ಲೋಡ್ ಆಗಲಿಲ್ಲ. ಸಂಪರ್ಕ ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.', noSources: 'ಮೂಲ ಸ್ಥಿತಿ ಇನ್ನೂ ಲಭ್ಯವಿಲ್ಲ.', askTitle: 'ಸಾಕ್ಷ್ಯ ಸಹಾಯಕನನ್ನು ಕೇಳಿ', prompt: 'ಲೋಡ್ ಮಾಡಿದ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಬಗ್ಗೆ ಕೇಳಿ…', send: 'ಕೇಳಿ', asking: 'ಡೇಟಾ ಪರಿಶೀಲಿಸುತ್ತಿದೆ…', prompts: ['ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಸಾರಾಂಶ', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'ಮೂಲಗಳು', disclaimer: 'ಗಮನಿಸಿ: ಉತ್ತರಗಳು ಈ ವ್ಯವಸ್ಥೆಯಲ್ಲಿ ಲೋಡ್ ಮಾಡಿದ ದಾಖಲೆಗಳಿಗೆ ಮಾತ್ರ ಸೀಮಿತ. ವೈದ್ಯಕೀಯ ಸಲಹೆ ಅಥವಾ ಅಧಿಕೃತ ಘೋಷಣೆ ಅಲ್ಲ.', sourceWarning: 'ಪ್ರಕಟಣೆ ಸೂಚನೆಗಳು ನಿರಂತರ ಪ್ರಕರಣಗಳ ಫೀಡ್ ಅಲ್ಲ.', emptyAnswer: 'ಮೂಲಾಧಾರಿತ ಉತ್ತರಕ್ಕಾಗಿ ಪ್ರಶ್ನೆ ಕೇಳಿ.', error: 'ದೋಷ ಸಂಭವಿಸಿದೆ. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.', trends: 'ಪ್ರವೃತ್ತಿಗಳು', trendTitle: 'ಜಿಲ್ಲಾವಾರು ರೋಗ ಹರಡುವಿಕೆಯ ಪ್ರವೃತ್ತಿ', trendHint: 'ಲಭ್ಯವಿರುವ IDSP ವರದಿಗಳನ್ನು ವೀಕ್ಷಿಸಿ. ಫಿಲ್ಟರ್‌ಗಳು API ಹಿಂತಿರುಗಿಸಿದ ದಾಖಲೆಗಳಿಗೆ ಅನ್ವಯಿಸುತ್ತವೆ.', diseaseFilter: 'ರೋಗ ಫಿಲ್ಟರ್', stateFilter: 'ರಾಜ್ಯ ಫಿಲ್ಟರ್', dateFrom: 'ದಿನಾಂಕದಿಂದ (YYYY-MM-DD)', dateTo: 'ದಿನಾಂಕದವರೆಗೆ (YYYY-MM-DD)', refreshTrends: 'ವರದಿಗಳನ್ನು ರಿಫ್ರೆಶ್ ಮಾಡಿ', clearFilters: 'ಫಿಲ್ಟರ್ ತೆರವುಗೊಳಿಸಿ', recordsFound: 'ಹೊಂದಾಣಿಕೆಯ ದಾಖಲೆಗಳು', topDistricts: 'ಹೆಚ್ಚು ವರದಿಯಾದ ಪ್ರಕರಣಗಳ ಜಿಲ್ಲೆಗಳು', noTrendRecords: 'ಈ ಫಿಲ್ಟರ್‌ಗಳಿಗೆ ದಾಖಲೆಗಳಿಲ್ಲ.', latestReport: 'ಇತ್ತೀಚಿನ ವರದಿ', trendCoverage: 'ಗಮನಿಸಿ: ಶ್ರೇಯಾಂಕವು API ಹಿಂತಿರುಗಿಸಿದ ಗರಿಷ್ಠ 500 ಲಭ್ಯ ವರದಿಗಳನ್ನು ಮಾತ್ರ ಆಧರಿಸಿದೆ. ಇದು ನೇರ ಅಥವಾ ಅಧಿಕೃತ ರೋಗ ಹರಡುವಿಕೆ ಘೋಷಣೆ ಅಲ್ಲ.', recordsLine: 'ದಾಖಲೆಗಳು', casesLine: 'ಪ್ರಕರಣಗಳು', deathsLine: 'ಸಾವುಗಳು' },
+  hi: { overview: 'अवलोकन', evidence: 'साक्ष्य', sources: 'स्रोत', appTitle: 'संरक्षा केंद्र', eyebrow: 'सार्वजनिक स्वास्थ्य जानकारी', summary: 'निगरानी एक नज़र में', totalRecords: 'रिकॉर्ड', cases: 'रिपोर्ट किए गए मामले', deaths: 'रिपोर्ट की गई मौतें', states: 'राज्य / केंद्र शासित प्रदेश', diseases: 'बीमारी लेबल', hospitals: 'अस्पताल निर्देशिका', refresh: 'डेटा रीफ़्रेश', available: 'उपलब्ध', unavailable: 'अनुपलब्ध', loading: 'डेटा लोड हो रहा है…', offline: 'API डेटा लोड नहीं हुआ। कनेक्शन जाँचकर पुनः प्रयास करें।', noSources: 'स्रोत स्थिति अभी उपलब्ध नहीं है।', askTitle: 'साक्ष्य सहायक से पूछें', prompt: 'लोड किए गए निगरानी डेटा के बारे में पूछें…', send: 'पूछें', asking: 'डेटा जाँचा जा रहा है…', prompts: ['निगरानी डेटासेट का सारांश', 'top diseases', 'weekly trend', 'total cases in Karnataka'], sourcesForAnswer: 'स्रोत', disclaimer: 'ध्यान दें: उत्तर केवल इस स्थापना में लोड रिकॉर्ड तक सीमित हैं। यह चिकित्सकीय सलाह या आधिकारिक प्रकोप घोषणा नहीं है।', sourceWarning: 'प्रकाशन सूचनाएँ निरंतर केस-काउंट फ़ीड नहीं हैं।', emptyAnswer: 'स्रोत-आधारित उत्तर के लिए प्रश्न पूछें।', error: 'समस्या हुई। कृपया फिर प्रयास करें।', trends: 'रुझान', trendTitle: 'ज़िला-स्तरीय प्रकोप रुझान', trendHint: 'उपलब्ध IDSP रिपोर्ट देखें। फ़िल्टर API से मिले रिकॉर्ड पर लागू होते हैं।', diseaseFilter: 'बीमारी फ़िल्टर', stateFilter: 'राज्य फ़िल्टर', dateFrom: 'शुरुआती तारीख (YYYY-MM-DD)', dateTo: 'अंतिम तारीख (YYYY-MM-DD)', refreshTrends: 'रिपोर्ट रीफ़्रेश करें', clearFilters: 'फ़िल्टर हटाएँ', recordsFound: 'मेल खाते रिकॉर्ड', topDistricts: 'सबसे अधिक रिपोर्ट किए गए मामलों वाले ज़िले', noTrendRecords: 'इन फ़िल्टर से कोई रिकॉर्ड नहीं मिला।', latestReport: 'नवीनतम रिपोर्ट', trendCoverage: 'ध्यान दें: रैंकिंग API से लौटाई गई अधिकतम 500 उपलब्ध रिपोर्टों पर आधारित है। यह लाइव या आधिकारिक प्रकोप घोषणा नहीं है।', recordsLine: 'रिकॉर्ड', casesLine: 'मामले', deathsLine: 'मौतें' },
 };
 
 const fmt = (value) => Number(value ?? 0).toLocaleString('en-IN');
+const safeCount = (value) => { const number = Number(value ?? 0); return Number.isFinite(number) && number > 0 ? number : 0; };
 
 function ActionButton({ children, onPress, disabled, secondary = false, accessibilityLabel }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel || String(children)} onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.button, secondary && styles.buttonSecondary, disabled && styles.buttonDisabled, pressed && !disabled && styles.buttonPressed]}><Text style={[styles.buttonText, secondary && styles.buttonTextSecondary]}>{children}</Text></Pressable>;
@@ -61,6 +63,13 @@ export default function App() {
   const [summary, setSummary] = useState(null);
   const [hospitalCount, setHospitalCount] = useState(0);
   const [sources, setSources] = useState([]);
+  const [trendRecords, setTrendRecords] = useState([]);
+  const [trendsBusy, setTrendsBusy] = useState(false);
+  const [trendsError, setTrendsError] = useState('');
+  const [diseaseFilter, setDiseaseFilter] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [busy, setBusy] = useState(false);
   const [pageError, setPageError] = useState('');
   const [question, setQuestion] = useState('');
@@ -166,6 +175,36 @@ export default function App() {
     }
   }, [question, language, token, t.error]);
 
+  const refreshTrends = useCallback(async () => {
+    if (!token) return;
+    setTrendsBusy(true);
+    setTrendsError('');
+    try {
+      const data = await requestJSON('/idsp/records?limit=500', { token }, fetch, API_BASE);
+      if (!Array.isArray(data)) throw new Error('The IDSP records endpoint returned an unexpected response.');
+      setTrendRecords(data);
+    } catch (error) {
+      setTrendsError(error?.message || 'Could not load district trends.');
+    } finally {
+      setTrendsBusy(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (token && tab === 'trends') refreshTrends();
+  }, [token, tab, refreshTrends]);
+
+  const filteredTrendRecords = filterTrendRecords(trendRecords, {
+    disease: diseaseFilter, state: stateFilter, fromDate, toDate,
+  });
+  const districtTotals = aggregateDistrictTrends(filteredTrendRecords).slice(0, 10);
+  const trendCaseTotal = filteredTrendRecords.reduce((sum, record) => sum + safeCount(record.cases), 0);
+  const trendDeathTotal = filteredTrendRecords.reduce((sum, record) => sum + safeCount(record.deaths), 0);
+  const maxDistrictCases = Math.max(1, ...districtTotals.map((record) => record.cases));
+  const clearTrendFilters = () => {
+    setDiseaseFilter(''); setStateFilter(''); setFromDate(''); setToDate('');
+  };
+
   const pickPrompt = (prompt) => {
     setQuestion(prompt);
     ask(prompt);
@@ -249,7 +288,7 @@ export default function App() {
       </View>
 
       <View style={styles.tabs}>
-        {[['overview', t.overview], ['evidence', t.evidence], ['sources', t.sources]].map(([id, label]) => <Pressable key={id} accessibilityRole="tab" accessibilityState={{ selected: tab === id }} onPress={() => setTab(id)} style={[styles.tab, tab === id && styles.tabActive]}><Text style={[styles.tabText, tab === id && styles.tabTextActive]}>{label}</Text></Pressable>)}
+        {[['overview', t.overview], ['trends', t.trends], ['evidence', t.evidence], ['sources', t.sources]].map(([id, label]) => <Pressable key={id} accessibilityRole="tab" accessibilityState={{ selected: tab === id }} onPress={() => setTab(id)} style={[styles.tab, tab === id && styles.tabActive]}><Text style={[styles.tabText, tab === id && styles.tabTextActive]}>{label}</Text></Pressable>)}
       </View>
 
       <ScrollView
@@ -271,6 +310,44 @@ export default function App() {
             </View>
             <View style={styles.noteCard}><Text style={styles.noteTitle}>DATA COVERAGE</Text><Text style={styles.noteText}>{t.disclaimer}</Text></View>
           </> : null}
+        </>}
+
+        {tab === 'trends' && <>
+          <Text style={styles.sectionKicker}>IDSP SURVEILLANCE</Text>
+          <Text style={styles.sectionTitle}>{t.trendTitle}</Text>
+          <Text style={styles.bodyCopy}>{t.trendHint}</Text>
+          <View style={styles.trendFilterRow}>
+            <TextInput accessibilityLabel={t.diseaseFilter} value={diseaseFilter} onChangeText={setDiseaseFilter} placeholder={t.diseaseFilter} placeholderTextColor={COLORS.muted} style={styles.trendFilterInput} autoCapitalize="none" />
+            <TextInput accessibilityLabel={t.stateFilter} value={stateFilter} onChangeText={setStateFilter} placeholder={t.stateFilter} placeholderTextColor={COLORS.muted} style={styles.trendFilterInput} autoCapitalize="words" />
+          </View>
+          <View style={styles.trendFilterRow}>
+            <TextInput accessibilityLabel={t.dateFrom} value={fromDate} onChangeText={setFromDate} placeholder={t.dateFrom} placeholderTextColor={COLORS.muted} style={styles.trendFilterInput} autoCapitalize="none" />
+            <TextInput accessibilityLabel={t.dateTo} value={toDate} onChangeText={setToDate} placeholder={t.dateTo} placeholderTextColor={COLORS.muted} style={styles.trendFilterInput} autoCapitalize="none" />
+          </View>
+          <View style={styles.trendActions}>
+            <View style={styles.trendActionCell}><ActionButton onPress={refreshTrends} disabled={trendsBusy}>{trendsBusy ? '…' : t.refreshTrends}</ActionButton></View>
+            <View style={styles.trendActionCell}><ActionButton secondary onPress={clearTrendFilters}>{t.clearFilters}</ActionButton></View>
+          </View>
+          {!!trendsError && <View style={styles.errorBox}><Text style={styles.errorText}>{trendsError}</Text><ActionButton onPress={refreshTrends}>{t.refreshTrends}</ActionButton></View>}
+          {trendsBusy && trendRecords.length === 0 ? <View style={styles.loading}><ActivityIndicator size="large" color={COLORS.teal} /><Text style={styles.muted}>{t.loading}</Text></View> : <>
+            <View style={styles.statsGrid}>
+              <StatCard label={t.recordsFound} value={filteredTrendRecords.length} accent />
+              <StatCard label={t.cases} value={trendCaseTotal} />
+              <StatCard label={t.deaths} value={trendDeathTotal} />
+            </View>
+            <Text style={styles.trendSubheading}>{t.topDistricts}</Text>
+            {districtTotals.length === 0 ? <View style={styles.noteCard}><Text style={styles.noteText}>{t.noTrendRecords}</Text></View> : districtTotals.map((district) => <View key={`${district.state}-${district.district}`} style={styles.districtCard}>
+              <View style={styles.districtTitleRow}>
+                <Text style={styles.districtName}>{district.district}</Text>
+                <Text style={styles.districtCases}>{fmt(district.cases)} {t.casesLine}</Text>
+              </View>
+              <Text style={styles.muted}>{district.state} · {fmt(district.deaths)} {t.deathsLine} · {fmt(district.records)} {t.recordsLine}</Text>
+              <View style={styles.trendBarTrack}><View style={[styles.trendBar, { width: `${Math.max(2, (district.cases / maxDistrictCases) * 100)}%` }]} /></View>
+              <Text style={styles.trendLatest}>{t.latestReport}: {district.latest || '—'}</Text>
+              {!!district.source_url && <Pressable onPress={() => Linking.openURL(district.source_url).catch(() => {})} style={styles.sourceLink}><Text style={styles.sourceLinkText}>Open source ↗</Text></Pressable>}
+            </View>)}
+            <View style={styles.noteCard}><Text style={styles.noteTitle}>DATA COVERAGE</Text><Text style={styles.noteText}>{t.trendCoverage}</Text></View>
+          </>}
         </>}
 
         {tab === 'evidence' && <>
@@ -393,6 +470,18 @@ const styles = StyleSheet.create({
   statusAvailable: { backgroundColor: COLORS.greenPale },
   statusUnavailable: { backgroundColor: COLORS.redPale },
   statusText: { color: COLORS.green, fontSize: 10, fontWeight: '800' },
+  trendFilterRow: { flexDirection: 'row', gap: 8 },
+  trendFilterInput: { flex: 1, minWidth: 0, minHeight: 46, backgroundColor: '#FFFFFF', borderRadius: 11, paddingHorizontal: 10, paddingVertical: 10, borderColor: COLORS.border, borderWidth: 1, color: COLORS.text, fontSize: 11 },
+  trendActions: { flexDirection: 'row', gap: 8 },
+  trendActionCell: { flex: 1, minWidth: 0 },
+  trendSubheading: { color: COLORS.text, fontWeight: '900', fontSize: 17, marginTop: 3 },
+  districtCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.border, borderRadius: 13, padding: 13, gap: 5 },
+  districtTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  districtName: { color: COLORS.text, fontSize: 14, fontWeight: '900', flex: 1 },
+  districtCases: { color: COLORS.tealDark, fontSize: 13, fontWeight: '900' },
+  trendBarTrack: { height: 8, borderRadius: 99, backgroundColor: '#E6EDF4', overflow: 'hidden', marginTop: 5 },
+  trendBar: { height: '100%', borderRadius: 99, backgroundColor: COLORS.tealDark },
+  trendLatest: { color: COLORS.muted, fontSize: 10, marginTop: 3 },
   footer: { marginTop: 18, paddingTop: 15, borderTopWidth: 1, borderTopColor: COLORS.border, gap: 3 },
   footerText: { fontSize: 10, color: '#8290A2', lineHeight: 15 },
   loginContent: { flexGrow: 1, justifyContent: 'center', padding: 22, backgroundColor: COLORS.page },
