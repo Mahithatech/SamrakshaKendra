@@ -117,3 +117,21 @@ def test_localized_summary_contains_coverage_disclaimer(sample_db):
     assert result["status"] == "answered"
     assert "లోడ్ చేసిన" in result["answer"]
     assert "రియల్-టైమ్" in result["disclaimer"]
+
+
+def test_short_greeting_without_question_mark_returns_help(sample_db):
+    result = ask_evidence_assistant(
+        AssistantQuestion(question="hi", language="en"),
+        db=sample_db,
+    )
+    assert result["status"] == "help"
+    assert "total cases in Karnataka" in result["answer"]
+
+
+def test_query_without_question_mark_is_supported(sample_db):
+    result = ask_evidence_assistant(
+        AssistantQuestion(question="top diseases", language="en"),
+        db=sample_db,
+    )
+    assert result["status"] == "answered"
+    assert result["items"]

@@ -23,7 +23,7 @@ Language = Literal["en", "te", "kn", "hi"]
 
 
 class AssistantQuestion(BaseModel):
-    question: str = Field(min_length=3, max_length=400)
+    question: str = Field(min_length=1, max_length=400)
     language: Language = "en"
 
 
@@ -147,8 +147,8 @@ def _format_scope(strings: dict, state: str | None, district: str | None, diseas
 @router.post("/query")
 def ask_evidence_assistant(payload: AssistantQuestion, db: Session = Depends(get_db)):
     question = payload.question.strip()
-    if len(question) < 3 or len(question) > 400:
-        raise HTTPException(status_code=422, detail="Question must contain 3–400 characters.")
+    if not question or len(question) > 400:
+        raise HTTPException(status_code=422, detail="Question must contain 1–400 non-whitespace characters.")
 
     language = payload.language if payload.language in _STRINGS else "en"
     s = _STRINGS[language]

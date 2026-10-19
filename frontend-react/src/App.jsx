@@ -983,9 +983,9 @@ function Dashboard({ onLogout }) {
 /* SK_EVIDENCE_ASSISTANT_V1 */
 function EvidenceAssistant({ language = 'en' }) {
   const copy = {
-    en: { title: 'Evidence assistant', subtitle: 'Ask questions about the loaded surveillance dataset. Answers are retrieved and calculated from structured records, with source links.', placeholder: 'Try “total cases in Karnataka” or “top diseases”…', ask: 'Ask question', busy: 'Searching records…', intro: 'Choose a suggested question or type a question below.', prompts: ['Summarize the surveillance dataset', 'Which diseases have the highest reported cases?', 'Show weekly trend', 'Show cases in Karnataka'], sources: 'Sources', scope: 'Data coverage', error: 'Could not query the evidence assistant.' },
-    te: { title: 'సాక్ష్యాధారిత సహాయకుడు', subtitle: 'లోడ్ చేసిన నిఘా డేటాసెట్ గురించి అడగండి. సమాధానాలు నిర్మిత రికార్డుల నుండి లెక్కించబడతాయి; మూల లింకులు చూపబడతాయి.', placeholder: '“total cases in Karnataka” లేదా “top diseases” ప్రయత్నించండి…', ask: 'ప్రశ్న అడగండి', busy: 'రికార్డులు వెతుకుతోంది…', intro: 'సూచించిన ప్రశ్న ఎంచుకోండి లేదా మీ ప్రశ్న టైప్ చేయండి.', prompts: ['నిఘా డేటాసెట్ సారాంశం', 'అత్యధిక కేసులున్న వ్యాధులు', 'వారాల ధోరణి చూపండి', 'Karnataka కేసులు చూపండి'], sources: 'మూలాలు', scope: 'డేటా పరిధి', error: 'సహాయకుడి ప్రశ్నను ప్రాసెస్ చేయలేకపోయింది.' },
-    kn: { title: 'ಸಾಕ್ಷ್ಯಾಧಾರಿತ ಸಹಾಯಕ', subtitle: 'ಲೋಡ್ ಮಾಡಿದ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾಸೆಟ್ ಕುರಿತು ಪ್ರಶ್ನೆ ಕೇಳಿ. ಉತ್ತರಗಳನ್ನು ರಚನಾತ್ಮಕ ದಾಖಲೆಗಳಿಂದ ಲೆಕ್ಕಿಸಲಾಗುತ್ತದೆ; ಮೂಲ ಲಿಂಕ್‌ಗಳೂ ಇರುತ್ತವೆ.', placeholder: '“total cases in Karnataka” ಅಥವಾ “top diseases” ಪ್ರಯತ್ನಿಸಿ…', ask: 'ಪ್ರಶ್ನೆ ಕೇಳಿ', busy: 'ದಾಖಲೆಗಳನ್ನು ಹುಡುಕುತ್ತಿದೆ…', intro: 'ಸೂಚಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ.', prompts: ['ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಸಾರಾಂಶ', 'ಹೆಚ್ಚು ವರದಿಯಾದ ರೋಗಗಳು', 'ವಾರದ ಪ್ರವೃತ್ತಿ ತೋರಿಸಿ', 'Karnataka ಪ್ರಕರಣಗಳನ್ನು ತೋರಿಸಿ'], sources: 'ಮೂಲಗಳು', scope: 'ಡೇಟಾ ವ್ಯಾಪ್ತಿ', error: 'ಸಹಾಯಕವನ್ನು ಪ್ರಶ್ನಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.' },
+    en: { title: 'Evidence assistant', subtitle: 'Ask questions about the loaded surveillance dataset. Answers are retrieved and calculated from structured records, with source links.', placeholder: 'Type a question, then press Enter or click Ask question…', hint: 'Press Enter to send · Shift+Enter for a new line', ask: 'Ask question', busy: 'Searching records…', intro: 'Choose a suggested question or type a question below.', prompts: ['Summarize the surveillance dataset', 'Which diseases have the highest reported cases?', 'Show weekly trend', 'Show cases in Karnataka'], sources: 'Sources', scope: 'Data coverage', error: 'Could not query the evidence assistant.' },
+    te: { title: 'సాక్ష్యాధారిత సహాయకుడు', subtitle: 'లోడ్ చేసిన నిఘా డేటాసెట్ గురించి అడగండి. సమాధానాలు నిర్మిత రికార్డుల నుండి లెక్కించబడతాయి; మూల లింకులు చూపబడతాయి.', placeholder: 'మీ ప్రశ్న టైప్ చేసి Enter నొక్కండి…', hint: 'పంపడానికి Enter నొక్కండి · కొత్త లైన్ కోసం Shift+Enter', ask: 'ప్రశ్న అడగండి', busy: 'రికార్డులు వెతుకుతోంది…', intro: 'సూచించిన ప్రశ్న ఎంచుకోండి లేదా మీ ప్రశ్న టైప్ చేయండి.', prompts: ['నిఘా డేటాసెట్ సారాంశం', 'అత్యధిక కేసులున్న వ్యాధులు', 'వారాల ధోరణి చూపండి', 'Karnataka కేసులు చూపండి'], sources: 'మూలాలు', scope: 'డేటా పరిధి', error: 'సహాయకుడి ప్రశ్నను ప్రాసెస్ చేయలేకపోయింది.' },
+    kn: { title: 'ಸಾಕ್ಷ್ಯಾಧಾರಿತ ಸಹಾಯಕ', subtitle: 'ಲೋಡ್ ಮಾಡಿದ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾಸೆಟ್ ಕುರಿತು ಪ್ರಶ್ನೆ ಕೇಳಿ. ಉತ್ತರಗಳನ್ನು ರಚನಾತ್ಮಕ ದಾಖಲೆಗಳಿಂದ ಲೆಕ್ಕಿಸಲಾಗುತ್ತದೆ; ಮೂಲ ಲಿಂಕ್‌ಗಳೂ ಇರುತ್ತವೆ.', placeholder: 'ನಿಮ್ಮ ಪ್ರಶ್ನೆ ಟೈಪ್ ಮಾಡಿ Enter ಒತ್ತಿ…', hint: 'ಕಳುಹಿಸಲು Enter · ಹೊಸ ಸಾಲಿಗೆ Shift+Enter', ask: 'ಪ್ರಶ್ನೆ ಕೇಳಿ', busy: 'ದಾಖಲೆಗಳನ್ನು ಹುಡುಕುತ್ತಿದೆ…', intro: 'ಸೂಚಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ.', prompts: ['ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಸಾರಾಂಶ', 'ಹೆಚ್ಚು ವರದಿಯಾದ ರೋಗಗಳು', 'ವಾರದ ಪ್ರವೃತ್ತಿ ತೋರಿಸಿ', 'Karnataka ಪ್ರಕರಣಗಳನ್ನು ತೋರಿಸಿ'], sources: 'ಮೂಲಗಳು', scope: 'ಡೇಟಾ ವ್ಯಾಪ್ತಿ', error: 'ಸಹಾಯಕವನ್ನು ಪ್ರಶ್ನಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.' },
     hi: { title: 'साक्ष्य-आधारित सहायक', subtitle: 'लोड किए गए निगरानी डेटासेट के बारे में पूछें। उत्तर संरचित रिकॉर्ड से गणना किए जाते हैं और स्रोत लिंक दिखाए जाते हैं।', placeholder: '“total cases in Karnataka” या “top diseases” आज़माएँ…', ask: 'प्रश्न पूछें', busy: 'रिकॉर्ड खोज रहे हैं…', intro: 'सुझाया गया प्रश्न चुनें या अपना प्रश्न लिखें।', prompts: ['निगरानी डेटासेट का सारांश', 'सबसे अधिक रिपोर्ट की गई बीमारियाँ', 'साप्ताहिक रुझान दिखाएँ', 'Karnataka के मामले दिखाएँ'], sources: 'स्रोत', scope: 'डेटा कवरेज', error: 'सहायक से प्रश्न नहीं किया जा सका।' },
   };
   const t = copy[language] || copy.en;
@@ -996,7 +996,7 @@ function EvidenceAssistant({ language = 'en' }) {
 
   const ask = async (value) => {
     const q = String(value ?? question).trim();
-    if (q.length < 3 || q.length > 400 || pending) return;
+    if (!q || q.length > 400 || pending) return;
     setQuestion(q); setPending(true); setError('');
     setHistory((old) => [...old, { role: 'user', text: q }]);
     try {
@@ -1018,9 +1018,10 @@ function EvidenceAssistant({ language = 'en' }) {
       <div className="panel-heading"><div><span className="eyebrow">PUBLIC HEALTH DATA</span><h3>{t.title}</h3><p className="muted small">{t.intro}</p></div></div>
       <div className="sk-evidence-prompts">{t.prompts.map((prompt) => <button type="button" className="button button-outline" key={prompt} disabled={pending} onClick={() => ask(prompt)}>{prompt}</button>)}</div>
       <form className="sk-evidence-form" onSubmit={(event) => { event.preventDefault(); ask(); }}>
-        <textarea value={question} maxLength={400} rows={2} onChange={(event) => setQuestion(event.target.value)} placeholder={t.placeholder} aria-label={t.placeholder} />
-        <button className="button button-primary" type="submit" disabled={pending || question.trim().length < 3}>{pending ? t.busy : t.ask}</button>
+        <textarea value={question} maxLength={400} rows={2} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(); } }} placeholder={t.placeholder} aria-label={t.placeholder} />
+        <button className="button button-primary" type="submit" disabled={pending || !question.trim()}>{pending ? t.busy : t.ask}</button>
       </form>
+      <small className="sk-evidence-input-hint">{t.hint || "Press Enter to send · Shift+Enter for a new line"}</small>
       {error && <div className="alert-banner error-banner"><strong>{t.error}</strong><span>{error}</span></div>}
       <div className="sk-evidence-thread" aria-live="polite">
         {!history.length && <div className="empty-state"><div className="empty-symbol">✦</div><strong>{t.title}</strong><p>{t.intro}</p></div>}
