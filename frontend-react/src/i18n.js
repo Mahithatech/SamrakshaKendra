@@ -11,25 +11,25 @@ const NAV = {
     overview: 'Overview', history: 'Historical data', signals: 'Global signals',
     'india-reports': 'India reports', 'report-queue': 'Report review queue',
     'staging-preview': 'Staged NCDC data', anomalies: 'Anomaly detection',
-    ica: 'ICA lab', map: 'Map & hotspots',
+    ica: 'ICA lab', map: 'Map & hotspots', assistant: 'Evidence assistant',
   },
   te: {
     overview: 'సారాంశం', history: 'చారిత్రక డేటా', signals: 'ప్రపంచ సంకేతాలు',
     'india-reports': 'భారత నివేదికలు', 'report-queue': 'నివేదిక సమీక్ష క్యూలు',
     'staging-preview': 'NCDC స్టేజింగ్ డేటా', anomalies: 'అసాధారణత గుర్తింపు',
-    ica: 'ICA ల్యాబ్', map: 'మ్యాప్ & హాట్‌స్పాట్‌లు',
+    ica: 'ICA ల్యాబ్', map: 'మ్యాప్ & హాట్‌స్పాట్‌లు', assistant: 'సాక్ష్యాధారిత సహాయకుడు',
   },
   kn: {
     overview: 'ಅವಲೋಕನ', history: 'ಐತಿಹಾಸಿಕ ಡೇಟಾ', signals: 'ಜಾಗತಿಕ ಸೂಚನೆಗಳು',
     'india-reports': 'ಭಾರತ ವರದಿಗಳು', 'report-queue': 'ವರದಿ ಪರಿಶೀಲನಾ ಸರತಿ',
     'staging-preview': 'NCDC ಸ್ಟೇಜಿಂಗ್ ಡೇಟಾ', anomalies: 'ಅಸಾಮಾನ್ಯತೆ ಪತ್ತೆ',
-    ica: 'ICA ಪ್ರಯೋಗಾಲಯ', map: 'ನಕ್ಷೆ ಮತ್ತು ಹಾಟ್‌ಸ್ಪಾಟ್‌ಗಳು',
+    ica: 'ICA ಪ್ರಯೋಗಾಲಯ', map: 'ನಕ್ಷೆ ಮತ್ತು ಹಾಟ್‌ಸ್ಪಾಟ್‌ಗಳು', assistant: 'ಸಾಕ್ಷ್ಯಾಧಾರಿತ ಸಹಾಯಕ',
   },
   hi: {
     overview: 'अवलोकन', history: 'ऐतिहासिक डेटा', signals: 'वैश्विक संकेत',
     'india-reports': 'भारत रिपोर्ट', 'report-queue': 'रिपोर्ट समीक्षा कतार',
     'staging-preview': 'NCDC स्टेजिंग डेटा', anomalies: 'विसंगति पहचान',
-    ica: 'ICA प्रयोगशाला', map: 'मानचित्र और हॉटस्पॉट',
+    ica: 'ICA प्रयोगशाला', map: 'मानचित्र और हॉटस्पॉट', assistant: 'साक्ष्य-आधारित सहायक',
   },
 };
 

@@ -15,6 +15,7 @@ from app.models import Hospital, IDSPSurveillance
 from app.disease_routes import router as disease_router
 from app.idsp_routes import router as idsp_router
 from app.advanced_routes import router as advanced_router
+from app.evidence_assistant import router as evidence_assistant_router  # SK_EVIDENCE_ASSISTANT_V1
 from app.source_routes import router as source_router, public_global_outbreaks
 from app.india_reports_routes import public_india_outbreak_reports, router as india_reports_router
 from app.report_review_queue import router as report_review_queue_router, sync_ncdc_report_queue
@@ -241,6 +242,7 @@ app.include_router(auth_router)
 app.include_router(disease_router)
 app.include_router(idsp_router)
 app.include_router(advanced_router)
+app.include_router(evidence_assistant_router)  # SK_EVIDENCE_ASSISTANT_V1
 app.include_router(source_router)
 app.include_router(india_reports_router)
 app.include_router(report_review_queue_router)

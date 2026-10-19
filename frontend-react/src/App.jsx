@@ -14,6 +14,7 @@ const navItems = [
   { id: 'ica', label: 'ICA lab', glyph: '◉' },
   { id: 'map', label: 'Map & hotspots', glyph: '◎' },
   { id: 'report-queue', label: 'Report review queue', glyph: '⇣' },
+  { id: 'assistant', label: 'Evidence assistant', glyph: '✦' },
 ];
 
 async function api(path, options = {}) {
@@ -870,7 +871,7 @@ function Dashboard({ onLogout }) {
     </aside>
 
     <main className="main-content">
-      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {translateNav(uiLanguage, pageMeta.id, pageMeta.label).toUpperCase()}</div><h1>{translateText(uiLanguage, page === 'overview' ? 'Public health overview' : translateNav(uiLanguage, pageMeta.id, pageMeta.label))}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'signals' ? 'View newly published official global outbreak notices.' : page === 'india-reports' ? 'Browse official Indian weekly outbreak reports.' : page === 'staged-data' ? 'Inspect numerical NCDC candidates awaiting supervisor review.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : page === 'map' ? 'Explore the latest available reporting period by state and review historical anomaly candidates.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><label className="sk-language-switcher" title="Change interface language"><span>{uiLanguage === 'te' ? 'భాష' : uiLanguage === 'kn' ? 'ಭಾಷೆ' : uiLanguage === 'hi' ? 'भाषा' : 'Language'}</span><select aria-label="Interface language" value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value)}>{UI_LANGUAGES.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}</select></label><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{translateText(uiLanguage, wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase())}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title={translateText(uiLanguage, "Clear all data filters")}>{translateText(uiLanguage, "Reset filters")}</button><button className="button button-quiet" onClick={onLogout}>Sign out</button></div></header>
+      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {translateNav(uiLanguage, pageMeta.id, pageMeta.label).toUpperCase()}</div><h1>{translateText(uiLanguage, page === 'overview' ? 'Public health overview' : translateNav(uiLanguage, pageMeta.id, pageMeta.label))}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'signals' ? 'View newly published official global outbreak notices.' : page === 'india-reports' ? 'Browse official Indian weekly outbreak reports.' : page === 'staged-data' ? 'Inspect numerical NCDC candidates awaiting supervisor review.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : page === 'map' ? 'Explore the latest available reporting period by state and review historical anomaly candidates.' : page === 'assistant' ? 'Ask questions using the loaded surveillance data and inspect sources.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><label className="sk-language-switcher" title="Change interface language"><span>{uiLanguage === 'te' ? 'భాష' : uiLanguage === 'kn' ? 'ಭಾಷೆ' : uiLanguage === 'hi' ? 'भाषा' : 'Language'}</span><select aria-label="Interface language" value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value)}>{UI_LANGUAGES.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}</select></label><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{translateText(uiLanguage, wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase())}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title={translateText(uiLanguage, "Clear all data filters")}>{translateText(uiLanguage, "Reset filters")}</button><button className="button button-quiet" onClick={onLogout}>Sign out</button></div></header>
 
       {error && <div className="alert-banner error-banner"><strong>API issue</strong><span>{error}</span><span className="hint">Confirm FastAPI is running and the enhancement router has been included.</span></div>}
       {notice && <div className="alert-banner info-banner"><strong>Update</strong><span>{notice}</span><button className="close-notice" aria-label="Dismiss notice" onClick={() => setNotice('')}>×</button></div>}
@@ -970,9 +971,70 @@ function Dashboard({ onLogout }) {
         <section className="notice-panel"><strong>How to explain ICA in the review</strong><p>“We use ICA as an exploratory unsupervised analysis to transform multiple correlated disease-count signals into components that are statistically independent under the model assumptions. The current prototype visualizes these components; we have not established that they correspond to actual disease causes or that ICA independently predicts outbreaks.”</p></section>
       </>}
 
+      {page === 'assistant' && <EvidenceAssistant language={uiLanguage} />}
+
       <footer className="main-footer"><span>Samraksha Kendra · Digital Disease Surveillance & Early Warning System</span><span>Research prototype · Not a medical or official outbreak declaration service</span></footer>
     </main>
   </div>;
+}
+
+
+
+/* SK_EVIDENCE_ASSISTANT_V1 */
+function EvidenceAssistant({ language = 'en' }) {
+  const copy = {
+    en: { title: 'Evidence assistant', subtitle: 'Ask questions about the loaded surveillance dataset. Answers are retrieved and calculated from structured records, with source links.', placeholder: 'Try “total cases in Karnataka” or “top diseases”…', ask: 'Ask question', busy: 'Searching records…', intro: 'Choose a suggested question or type a question below.', prompts: ['Summarize the surveillance dataset', 'Which diseases have the highest reported cases?', 'Show weekly trend', 'Show cases in Karnataka'], sources: 'Sources', scope: 'Data coverage', error: 'Could not query the evidence assistant.' },
+    te: { title: 'సాక్ష్యాధారిత సహాయకుడు', subtitle: 'లోడ్ చేసిన నిఘా డేటాసెట్ గురించి అడగండి. సమాధానాలు నిర్మిత రికార్డుల నుండి లెక్కించబడతాయి; మూల లింకులు చూపబడతాయి.', placeholder: '“total cases in Karnataka” లేదా “top diseases” ప్రయత్నించండి…', ask: 'ప్రశ్న అడగండి', busy: 'రికార్డులు వెతుకుతోంది…', intro: 'సూచించిన ప్రశ్న ఎంచుకోండి లేదా మీ ప్రశ్న టైప్ చేయండి.', prompts: ['నిఘా డేటాసెట్ సారాంశం', 'అత్యధిక కేసులున్న వ్యాధులు', 'వారాల ధోరణి చూపండి', 'Karnataka కేసులు చూపండి'], sources: 'మూలాలు', scope: 'డేటా పరిధి', error: 'సహాయకుడి ప్రశ్నను ప్రాసెస్ చేయలేకపోయింది.' },
+    kn: { title: 'ಸಾಕ್ಷ್ಯಾಧಾರಿತ ಸಹಾಯಕ', subtitle: 'ಲೋಡ್ ಮಾಡಿದ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾಸೆಟ್ ಕುರಿತು ಪ್ರಶ್ನೆ ಕೇಳಿ. ಉತ್ತರಗಳನ್ನು ರಚನಾತ್ಮಕ ದಾಖಲೆಗಳಿಂದ ಲೆಕ್ಕಿಸಲಾಗುತ್ತದೆ; ಮೂಲ ಲಿಂಕ್‌ಗಳೂ ಇರುತ್ತವೆ.', placeholder: '“total cases in Karnataka” ಅಥವಾ “top diseases” ಪ್ರಯತ್ನಿಸಿ…', ask: 'ಪ್ರಶ್ನೆ ಕೇಳಿ', busy: 'ದಾಖಲೆಗಳನ್ನು ಹುಡುಕುತ್ತಿದೆ…', intro: 'ಸೂಚಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ.', prompts: ['ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಸಾರಾಂಶ', 'ಹೆಚ್ಚು ವರದಿಯಾದ ರೋಗಗಳು', 'ವಾರದ ಪ್ರವೃತ್ತಿ ತೋರಿಸಿ', 'Karnataka ಪ್ರಕರಣಗಳನ್ನು ತೋರಿಸಿ'], sources: 'ಮೂಲಗಳು', scope: 'ಡೇಟಾ ವ್ಯಾಪ್ತಿ', error: 'ಸಹಾಯಕವನ್ನು ಪ್ರಶ್ನಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.' },
+    hi: { title: 'साक्ष्य-आधारित सहायक', subtitle: 'लोड किए गए निगरानी डेटासेट के बारे में पूछें। उत्तर संरचित रिकॉर्ड से गणना किए जाते हैं और स्रोत लिंक दिखाए जाते हैं।', placeholder: '“total cases in Karnataka” या “top diseases” आज़माएँ…', ask: 'प्रश्न पूछें', busy: 'रिकॉर्ड खोज रहे हैं…', intro: 'सुझाया गया प्रश्न चुनें या अपना प्रश्न लिखें।', prompts: ['निगरानी डेटासेट का सारांश', 'सबसे अधिक रिपोर्ट की गई बीमारियाँ', 'साप्ताहिक रुझान दिखाएँ', 'Karnataka के मामले दिखाएँ'], sources: 'स्रोत', scope: 'डेटा कवरेज', error: 'सहायक से प्रश्न नहीं किया जा सका।' },
+  };
+  const t = copy[language] || copy.en;
+  const [question, setQuestion] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const [history, setHistory] = useState([]);
+
+  const ask = async (value) => {
+    const q = String(value ?? question).trim();
+    if (q.length < 3 || q.length > 400 || pending) return;
+    setQuestion(q); setPending(true); setError('');
+    setHistory((old) => [...old, { role: 'user', text: q }]);
+    try {
+      const result = await api('/public/assistant/query', {
+        method: 'POST',
+        body: JSON.stringify({ question: q, language }),
+      });
+      setHistory((old) => [...old, { role: 'assistant', text: result.answer, sources: result.sources || [], disclaimer: result.disclaimer, items: result.items || [], note: result.note }]);
+      setQuestion('');
+    } catch (err) {
+      setError(err?.message || t.error);
+      setHistory((old) => [...old, { role: 'assistant', text: t.error, sources: [], disclaimer: '', items: [] }]);
+    } finally { setPending(false); }
+  };
+
+  return <>
+    <section className="hero-compact sk-evidence-hero"><div><Badge tone="blue">RETRIEVAL-BASED · SOURCE-LINKED</Badge><h2>{t.title}</h2><p>{t.subtitle}</p></div><div className="hero-compact-icon">✦</div></section>
+    <section className="panel sk-evidence-panel">
+      <div className="panel-heading"><div><span className="eyebrow">PUBLIC HEALTH DATA</span><h3>{t.title}</h3><p className="muted small">{t.intro}</p></div></div>
+      <div className="sk-evidence-prompts">{t.prompts.map((prompt) => <button type="button" className="button button-outline" key={prompt} disabled={pending} onClick={() => ask(prompt)}>{prompt}</button>)}</div>
+      <form className="sk-evidence-form" onSubmit={(event) => { event.preventDefault(); ask(); }}>
+        <textarea value={question} maxLength={400} rows={2} onChange={(event) => setQuestion(event.target.value)} placeholder={t.placeholder} aria-label={t.placeholder} />
+        <button className="button button-primary" type="submit" disabled={pending || question.trim().length < 3}>{pending ? t.busy : t.ask}</button>
+      </form>
+      {error && <div className="alert-banner error-banner"><strong>{t.error}</strong><span>{error}</span></div>}
+      <div className="sk-evidence-thread" aria-live="polite">
+        {!history.length && <div className="empty-state"><div className="empty-symbol">✦</div><strong>{t.title}</strong><p>{t.intro}</p></div>}
+        {history.map((entry, index) => <article className={`sk-evidence-message ${entry.role}`} key={`${entry.role}-${index}`}>
+          <div className="sk-evidence-role">{entry.role === 'user' ? 'YOU' : 'EVIDENCE ASSISTANT'}</div>
+          <p>{entry.text}</p>
+          {entry.items?.length > 0 && entry.items.length < 9 && <div className="sk-evidence-result-grid">{entry.items.map((item, n) => <div className="sk-evidence-result" key={`${item.label || 'summary'}-${n}`}><strong>{item.label || `${item.records} records`}</strong><span>{item.cases} cases · {item.deaths} deaths</span></div>)}</div>}
+          {entry.sources?.length > 0 && <div className="sk-evidence-sources"><strong>{t.sources}</strong>{entry.sources.map((source, n) => <div key={`${source.url || source.path}-${n}`}>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title || source.url} ↗</a> : <a href={`${API_BASE}${source.path || '/public/surveillance/summary'}`} target="_blank" rel="noreferrer">{source.title || t.sources} ↗</a>}</div>)}</div>}
+          {entry.disclaimer && <small className="sk-evidence-disclaimer">{entry.disclaimer}</small>}
+        </article>)}
+      </div>
+      <div className="notice-panel sk-evidence-note"><strong>{t.scope}</strong><p>Answers are computed from structured IDSP records loaded in this installation. This module does not use an LLM, diagnose patients, or declare outbreaks. Always inspect linked source material and the coverage note.</p></div>
+    </section>
+  </>;
 }
 
 function EventRow({ event }) {
