@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Samraksha Kendra",
+    "slug": "samraksha-kendra-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "samrakshakendra",
+    "sdkVersion": "57.0.0",
+    "android": {
+      "package": "com.samrakshakendra.mobile"
+    },
+    "ios": {
+      "bundleIdentifier": "com.samrakshakendra.mobile"
+    },
+    "extra": {
+      "apiBaseUrl": "https://samraksha-kendra-api.onrender.com"
+    }
+  }
+}
