@@ -178,3 +178,8 @@
 @media(max-width:900px){.sk-staging-state-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.sk-staging-toolbar{align-items:stretch;}}
 @media(max-width:560px){.sk-staging-state-grid{grid-template-columns:1fr;}.sk-staging-mark{display:none;}}
 
+
+/* SK_MULTILINGUAL_UI_V1 */
+.sk-language-switcher { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; border: 1px solid var(--border, #dbe3ee); border-radius: 10px; color: var(--muted, #637086); font-size: 12px; background: var(--panel, #ffffff); white-space: nowrap; }
+.sk-language-switcher select { max-width: 110px; min-width: 82px; border: 0; outline: 0; color: var(--text, #182433); background: transparent; font: inherit; cursor: pointer; }
+@media (max-width: 760px) { .sk-language-switcher { padding: 4px 6px; } .sk-language-switcher span { display: none; } .sk-language-switcher select { min-width: 76px; max-width: 90px; } }

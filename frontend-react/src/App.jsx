@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { UI_LANGUAGES, translateNav, translateText } from './i18n.js';
 import { ComposableMap, Geographies, Geography, Marker } from 'react-simple-maps';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '');
@@ -51,12 +52,12 @@ function Badge({ children, tone = 'neutral' }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
 }
 
-function MetricCard({ label, value, footnote, accent, glyph }) {
+function MetricCard({ label, value, footnote, accent, glyph, language = 'en' }) {
   return (
     <article className={`metric-card accent-${accent}`}>
-      <div className="metric-top"><span>{label}</span><span className="metric-glyph">{glyph}</span></div>
+      <div className="metric-top"><span>{translateText(language, label)}</span><span className="metric-glyph">{glyph}</span></div>
       <div className="metric-value">{value === null || value === undefined ? '—' : formatNumber(value)}</div>
-      <div className="metric-footnote">{footnote}</div>
+      <div className="metric-footnote">{translateText(language, footnote)}</div>
     </article>
   );
 }
@@ -678,6 +679,10 @@ function StagedNcdcPreviewPanel() {
 
 function Dashboard({ onLogout }) {
   const [page, setPage] = useState('overview');
+  // SK_MULTILINGUAL_UI_V1: persists the user's preferred interface language.
+  const [uiLanguage, setUiLanguage] = useState(() => {
+    try { return window.localStorage.getItem('sk-ui-language') || 'en'; } catch { return 'en'; }
+  });
   const [summary, setSummary] = useState(null);
   const [records, setRecords] = useState([]);
   const [totalRecords, setTotalRecords] = useState(0);
@@ -700,6 +705,10 @@ function Dashboard({ onLogout }) {
   const [indiaReports, setIndiaReports] = useState(null);
   const [indiaReportsLoading, setIndiaReportsLoading] = useState(false);
   const [indiaReportsError, setIndiaReportsError] = useState('');
+
+  useEffect(() => {
+    try { window.localStorage.setItem('sk-ui-language', uiLanguage); } catch { /* storage may be disabled */ }
+  }, [uiLanguage]);
 
   const filterParams = useMemo(() => {
     const p = new URLSearchParams();
@@ -856,12 +865,12 @@ function Dashboard({ onLogout }) {
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">SK</div><div><strong>Samraksha Kendra</strong><small>PUBLIC HEALTH INTELLIGENCE</small></div></div>
       <div className="nav-label">WORKSPACE</div>
-      <nav>{navItems.map((item) => <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => setPage(item.id)}><span className="nav-glyph">{item.glyph}</span>{item.label}{page === item.id && <span className="nav-indicator" />}</button>)}</nav>
-      <div className="sidebar-bottom"><div className={`connection-pill ${wsStatus}`}><span className="status-dot" />{wsStatus === 'live' ? 'Live alerts connected' : wsStatus === 'connecting' || wsStatus === 'reconnecting' ? 'Connecting live alerts…' : 'Live alerts offline'}</div><div className="sidebar-note">Aggregate historical data for awareness and research. Not a diagnostic service.</div><div className="footer-brand">SAMRAKSHA KENDRA <span>•</span> REVIEW BUILD</div></div>
+      <nav>{navItems.map((item) => <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => setPage(item.id)}><span className="nav-glyph">{item.glyph}</span>{translateNav(uiLanguage, item.id, item.label)}{page === item.id && <span className="nav-indicator" />}</button>)}</nav>
+      <div className="sidebar-bottom"><div className={`connection-pill ${wsStatus}`}><span className="status-dot" />{translateText(uiLanguage, wsStatus === 'live' ? 'Live alerts connected' : wsStatus === 'connecting' || wsStatus === 'reconnecting' ? 'Connecting live alerts…' : 'Live alerts offline')}</div><div className="sidebar-note">Aggregate historical data for awareness and research. Not a diagnostic service.</div><div className="footer-brand">SAMRAKSHA KENDRA <span>•</span> REVIEW BUILD</div></div>
     </aside>
 
     <main className="main-content">
-      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {pageMeta.label.toUpperCase()}</div><h1>{page === 'overview' ? 'Public health overview' : pageMeta.label}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'signals' ? 'View newly published official global outbreak notices.' : page === 'india-reports' ? 'Browse official Indian weekly outbreak reports.' : page === 'staged-data' ? 'Inspect numerical NCDC candidates awaiting supervisor review.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : page === 'map' ? 'Explore the latest available reporting period by state and review historical anomaly candidates.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase()}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title="Clear all data filters">Reset filters</button><button className="button button-quiet" onClick={onLogout}>Sign out</button></div></header>
+      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {translateNav(uiLanguage, pageMeta.id, pageMeta.label).toUpperCase()}</div><h1>{translateText(uiLanguage, page === 'overview' ? 'Public health overview' : translateNav(uiLanguage, pageMeta.id, pageMeta.label))}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'signals' ? 'View newly published official global outbreak notices.' : page === 'india-reports' ? 'Browse official Indian weekly outbreak reports.' : page === 'staged-data' ? 'Inspect numerical NCDC candidates awaiting supervisor review.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : page === 'map' ? 'Explore the latest available reporting period by state and review historical anomaly candidates.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><label className="sk-language-switcher" title="Change interface language"><span>{uiLanguage === 'te' ? 'భాష' : uiLanguage === 'kn' ? 'ಭಾಷೆ' : uiLanguage === 'hi' ? 'भाषा' : 'Language'}</span><select aria-label="Interface language" value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value)}>{UI_LANGUAGES.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}</select></label><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{translateText(uiLanguage, wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase())}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title={translateText(uiLanguage, "Clear all data filters")}>{translateText(uiLanguage, "Reset filters")}</button><button className="button button-quiet" onClick={onLogout}>Sign out</button></div></header>
 
       {error && <div className="alert-banner error-banner"><strong>API issue</strong><span>{error}</span><span className="hint">Confirm FastAPI is running and the enhancement router has been included.</span></div>}
       {notice && <div className="alert-banner info-banner"><strong>Update</strong><span>{notice}</span><button className="close-notice" aria-label="Dismiss notice" onClick={() => setNotice('')}>×</button></div>}
