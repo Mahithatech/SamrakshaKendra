@@ -33,6 +33,8 @@ from .models import IDSPSurveillance
 from .websocket_manager import manager
 from .auth_security import decode_access_token
 
+from .anomaly_service import run_synthetic_anomaly_screening_fixture
+
 router = APIRouter(tags=["Public Data and Advanced Analytics"])
 
 
@@ -108,6 +110,15 @@ def _records_for_analysis(db: Session) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+@router.get(
+    "/analytics/anomalies/demo-screening",
+    summary="Validate anomaly screening on a clearly synthetic fixture",
+)
+def synthetic_anomaly_screening_demo():
+    """Run a deterministic detector test; does not query or change the database."""
+    return run_synthetic_anomaly_screening_fixture()
 
 
 @router.get(

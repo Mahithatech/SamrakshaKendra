@@ -691,6 +691,7 @@ function Dashboard({ onLogout }) {
   const [filters, setFilters] = useState({ state: '', district: '', disease: '', year: '' });
   const [appliedFilters, setAppliedFilters] = useState({ state: '', district: '', disease: '', year: '' });
   const [anomalies, setAnomalies] = useState([]);
+  const [syntheticAnomalyResult, setSyntheticAnomalyResult] = useState(null);
   const [icaResult, setIcaResult] = useState(null);
   const [icaComponents, setIcaComponents] = useState(2);
   const [loading, setLoading] = useState(true);
@@ -838,6 +839,18 @@ function Dashboard({ onLogout }) {
     finally { setWorking(false); }
   };
 
+  const runSyntheticScreening = async () => {
+    setWorking(true); setError(''); setSyntheticAnomalyResult(null);
+    try {
+      const result = await api('/analytics/anomalies/demo-screening');
+      setSyntheticAnomalyResult(result);
+      setNotice(result.status === 'passed'
+        ? 'Synthetic anomaly-screening validation passed. No surveillance records were changed.'
+        : 'Synthetic anomaly-screening validation did not match the expected result.');
+    } catch (err) { setError(err.message || 'Could not run the synthetic screening check.'); }
+    finally { setWorking(false); }
+  };
+
   const loadIca = async () => {
     setWorking(true); setError(''); setIcaResult(null);
     try { setIcaResult(await api(`/analytics/ica?components=${icaComponents}`)); }
@@ -947,9 +960,10 @@ function Dashboard({ onLogout }) {
 
       {page === 'anomalies' && <>
         <section className="hero-compact"><div><Badge tone="blue">EXPLAINABLE SCREENING</Badge><h2>Find unusual changes in reported cases.</h2><p>Historical screening compares a point with its preceding observations using a trailing median and robust median absolute deviation (MAD). Human review remains essential.</p></div><div className="hero-compact-icon">⌁</div></section>
-        <div className="action-row"><button className="button button-primary" disabled={working} onClick={runDetection}>{working ? 'Working…' : 'Run historical screening'}</button><button className="button button-outline" disabled={working} onClick={triggerDemo}>{working ? 'Working…' : 'Generate synthetic demo event'}</button><Badge tone="warning">Demo data never enters real records</Badge></div>
+        <div className="action-row"><button className="button button-primary" disabled={working} onClick={runDetection}>{working ? 'Working…' : 'Run historical screening'}</button><button className="button button-outline" disabled={working} onClick={runSyntheticScreening}>{working ? 'Working…' : 'Validate detector (synthetic)'}</button><button className="button button-outline" disabled={working} onClick={triggerDemo}>{working ? 'Working…' : 'Generate synthetic demo event'}</button><Badge tone="warning">Demo data never enters real records</Badge></div>
         <section className="metric-grid three-metrics"><MetricCard label="Flagged historical patterns" value={anomalies.length} footnote="Current screening results" accent="rose" glyph="⌁"/><MetricCard label="Connected live clients" value={wsStatus === 'live' ? 1 : 0} footnote="This browser connection status" accent="teal" glyph="↗"/><MetricCard label="Synthetic events shown here" value={liveEvents.filter((e) => e.is_synthetic).length} footnote="Local event history" accent="violet" glyph="◇"/></section>
         <section className="panel"><div className="panel-heading"><div><span className="eyebrow">HISTORICAL RESULTS</span><h3>Potential anomalies</h3><p className="muted small">Requires enough previous observations within the same state-and-disease series.</p></div><Badge>{anomalies.length} found</Badge></div>{anomalies.length ? <div className="anomaly-list">{anomalies.map((item, i) => <div className="anomaly-card" key={`${item.state}-${item.disease}-${item.year}-${item.week}-${i}`}><div className="anomaly-bullet">!</div><div className="anomaly-body"><div className="anomaly-title-row"><strong>{item.disease}</strong><Badge tone={item.severity === 'HIGH' ? 'danger' : item.severity === 'MODERATE' ? 'warning' : 'blue'}>{item.severity}</Badge></div><p>{item.message}</p><div className="meta-row"><span>{item.state}</span><span>{item.year} · Week {item.week}</span><span>{item.method}</span></div></div><div className="anomaly-values"><strong>{formatNumber(item.cases)}</strong><small>cases</small><span>Baseline {formatNumber(item.baseline_median)}</span>{item.mad_score !== null && <span>Robust score {item.mad_score}</span>}</div></div>)}</div> : <EmptyState title="No historical anomalies flagged" body="This does not prove no outbreak exists. It means the current rule did not flag any eligible records in the loaded dataset."/>}</section>
+        {syntheticAnomalyResult && <section className="panel"><div className="panel-heading"><div><span className="eyebrow">DETECTOR VALIDATION</span><h3>Synthetic anomaly screening check</h3><p className="muted small">Controlled fixture; independent of hosted surveillance records.</p></div><Badge tone={syntheticAnomalyResult.status === 'passed' ? 'success' : 'danger'}>{syntheticAnomalyResult.status.toUpperCase()}</Badge></div><p>{syntheticAnomalyResult.message}</p><div className="feed-metadata"><span>Fixture: {syntheticAnomalyResult.fixture_name}</span><span>Periods: {syntheticAnomalyResult.input_periods}</span><span>Expected flags: {syntheticAnomalyResult.expected_flags}</span><span>Detected: {syntheticAnomalyResult.count}</span></div>{syntheticAnomalyResult.items?.map((item, index) => <div className="anomaly-card" key={`synthetic-${index}`}><div className="anomaly-bullet">!</div><div className="anomaly-body"><div className="anomaly-title-row"><strong>{item.disease}</strong><Badge tone="warning">SYNTHETIC · {item.severity}</Badge></div><p>{item.message}</p><div className="meta-row"><span>{item.state}</span><span>{item.year} · Week {item.week}</span><span>{item.method}</span></div></div><div className="anomaly-values"><strong>{formatNumber(item.cases)}</strong><small>synthetic cases</small><span>Baseline {formatNumber(item.baseline_median)}</span></div></div>)}<p className="feed-warning-text">{syntheticAnomalyResult.caution}</p></section>}
         <section className="panel"><div className="panel-heading"><div><span className="eyebrow">REAL-TIME NOTIFICATIONS</span><h3>Events received by this browser</h3></div><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{wsStatus}</Badge></div>{liveEvents.length ? <div className="event-list">{liveEvents.map((event) => <EventRow key={event.event_id || event.created_at} event={event}/>)}</div> : <EmptyState title="Waiting for an event" body="Keep the WebSocket connected and select Generate synthetic demo event to test the live delivery path."/>}</section>
       </>}
 

@@ -340,3 +340,57 @@ def get_anomaly_diagnostics(
             ),
         ],
     }
+
+
+def run_synthetic_anomaly_screening_fixture() -> dict[str, Any]:
+    """Validate the anomaly detector with labelled synthetic values only.
+
+    Independent of PostgreSQL; never mutates surveillance rows.
+    """
+    from datetime import datetime, timezone
+
+    current_year = datetime.now(timezone.utc).year
+    case_counts = [10, 10, 10, 10, 10, 100]
+    records = [
+        {
+            "year": current_year,
+            "week": week,
+            "state": "SYNTHETIC DEMO",
+            "district": "DEMO ONLY",
+            "disease": "Synthetic disease signal",
+            "cases": cases,
+            "deaths": 0,
+        }
+        for week, cases in enumerate(case_counts, start=1)
+    ]
+    anomalies = detect_case_anomalies(records, min_history=4, lookback=8)
+    for item in anomalies:
+        item["is_synthetic"] = True
+        item["source"] = "synthetic_validation_fixture"
+        item["district"] = "DEMO ONLY"
+        item["message"] = (
+            "SYNTHETIC FIXTURE ONLY: the final 100-case point exceeds the prior "
+            "five flat 10-case observations. This validates detector logic; it is "
+            "not a real disease report."
+        )
+    passed = len(anomalies) == 1 and anomalies[0].get("cases") == 100
+    return {
+        "status": "passed" if passed else "failed",
+        "is_synthetic": True,
+        "fixture_name": "flat baseline with one controlled spike",
+        "input_periods": len(records),
+        "input_case_counts": case_counts,
+        "expected_flags": 1,
+        "count": len(anomalies),
+        "items": anomalies,
+        "message": (
+            "Expected synthetic spike detected; no database reads or writes were performed."
+            if passed else "Detector did not flag the expected synthetic spike."
+        ),
+        "caution": (
+            "Synthetic validation only. These generated values are not surveillance data, "
+            "must not be counted in dashboard totals, and do not represent an outbreak. "
+            "Real-data screening requires sufficient verified historical observations "
+            "and human review."
+        ),
+    }
