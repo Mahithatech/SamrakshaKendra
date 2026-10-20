@@ -256,41 +256,43 @@ def validate_candidate(candidate: dict[str, Any]) -> list[str]:
 
 
 def parse_candidate_lines(text_content: str, source_url: str, title: str = "", source_sha256: str = "") -> list[dict[str, Any]]:
-    """Parse recognizable NCDC outbreak records; all records remain review-only."""
+    """Conservatively parse obvious table rows; ambiguous PDF text is skipped, never guessed.
+
+    Expected text layout is state, district, disease, ... , cases, deaths with whitespace/tab
+    cell separators. Every output remains a review-only candidate, even if validation passes.
+    """
     if not is_allowed_source_url(source_url, "NCDC"):
         return []
-
     year, week = parse_report_period(source_url, title)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
-
-    states = {
-        "AP": "Andhra Pradesh", "AR": "Arunachal Pradesh", "AS": "Assam",
-        "BR": "Bihar", "CT": "Chhattisgarh", "CG": "Chhattisgarh",
-        "GA": "Goa", "GJ": "Gujarat", "HR": "Haryana",
-        "HP": "Himachal Pradesh", "JH": "Jharkhand", "KA": "Karnataka",
-        "KN": "Karnataka", "KL": "Kerala", "MP": "Madhya Pradesh",
-        "MH": "Maharashtra", "MN": "Manipur", "ML": "Meghalaya",
-        "MZ": "Mizoram", "NL": "Nagaland", "OD": "Odisha",
-        "OR": "Odisha", "PB": "Punjab", "RJ": "Rajasthan",
-        "SK": "Sikkim", "TN": "Tamil Nadu", "TS": "Telangana",
-        "TR": "Tripura", "UP": "Uttar Pradesh", "UK": "Uttarakhand",
-        "UT": "Uttarakhand", "WB": "West Bengal", "DL": "Delhi",
-        "JK": "Jammu and Kashmir", "LA": "Ladakh",
-    }
-
-    diseases = sorted({
-        "Acute Gastroenteritis", "Acute Diarrhoeal Disease",
-        "Acute Diarrheal Disease", "Suspected Food Poisoning",
-        "Food Poisoning", "Hand Foot and Mouth Disease",
-        "Scrub Typhus", "Viral Fever", "Unusual Fever",
-        "Chickenpox", "Chikungunya", "Dengue", "Measles",
-        "Malaria", "Typhoid", "Cholera", "Jaundice",
-        "Hepatitis", "Leptospirosis", "Mumps", "Diphtheria",
-        "Diarrhoea", "Diarrhea", "Fever", "Rabies",
-    }, key=len, reverse=True)
-
-    def add_candidate(state, district, disease, cases, deaths, start, end, excerpt):
+    for raw in (text_content or "").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if len(line) < 12 or len(line) > 1000:
+            continue
+        # pypdf preserves some column spacing; pipes and tabs are also handled.
+        cells = [part.strip() for part in re.split(r"\t+|\s{2,}|\s*\|\s*", raw.strip()) if part.strip()]
+        if len(cells) < 5:
+            continue
+        if cells[0].isdigit():
+            cells = cells[1:]
+        if len(cells) < 5:
+            continue
+        lowered = " ".join(cells[:4]).lower()
+        if any(word in lowered for word in ("state district disease cases deaths", "name of state", "number of cases", "sl. no.")):
+            continue
+        try:
+            cases = parse_count(cells[-2])
+            deaths = parse_count(cells[-1])
+        except ValueError:
+            continue
+        state, district = cells[0], cells[1]
+        disease = " ".join(cells[2:-2]).strip()
+        if not disease or len(disease) < 3 or not re.search(r"[A-Za-z]", state + district + disease):
+            continue
+        # Candidate must have at least a clear case count. Unknown deaths remain NULL.
+        if cases is None:
+            continue
         candidate = {
             "source_url": source_url,
             "source_sha256": source_sha256,
@@ -301,112 +303,20 @@ def parse_candidate_lines(text_content: str, source_url: str, title: str = "", s
             "disease": disease[:180],
             "cases": cases,
             "deaths": deaths,
-            "reporting_start_date": start,
-            "reporting_end_date": end,
-            "raw_excerpt": excerpt[:1000],
+            "reporting_start_date": None,
+            "reporting_end_date": None,
+            "raw_excerpt": line[:1000],
         }
-        candidate["validation_errors"] = validate_candidate(candidate)
-        candidate["validation_status"] = (
-            "needs_review" if candidate["validation_errors"]
-            else "passed_preliminary_checks"
-        )
-        key_raw = "|".join(str(candidate.get(field) or "") for field in (
-            "source_url", "report_year", "report_week", "state", "district",
-            "disease", "cases", "deaths", "raw_excerpt"
+        validation_errors = validate_candidate(candidate)
+        candidate["validation_errors"] = validation_errors
+        candidate["validation_status"] = "needs_review" if validation_errors else "passed_preliminary_checks"
+        key_raw = "|".join(str(candidate.get(field) if candidate.get(field) is not None else "") for field in (
+            "source_url", "report_year", "report_week", "state", "district", "disease", "cases", "deaths", "raw_excerpt"
         ))
-        candidate["candidate_id"] = hashlib.sha256(
-            key_raw.casefold().encode("utf-8")
-        ).hexdigest()
+        candidate["candidate_id"] = hashlib.sha256(key_raw.casefold().encode("utf-8")).hexdigest()
         if candidate["candidate_id"] not in seen:
             result.append(candidate)
             seen.add(candidate["candidate_id"])
-
-    # Normalize PDF line wrapping without treating descriptions as case records.
-    text = (text_content or "").replace("\x00", " ")
-    text = re.sub(r"(?m)(/[0-9]{1,3})[ \t]*\n[ \t]*([0-9]{1,2})(?=\s)", r"\1\2", text)
-    id_pattern = re.compile(
-        r"(?<![A-Z0-9])([A-Z]{2})/([A-Z0-9]{2,})/(20\d{2})/(\d{1,2})/(\d+)"
-    )
-    matches = list(id_pattern.finditer(text))
-
-    for i, match in enumerate(matches):
-        chunk = text[match.start():matches[i + 1].start() if i + 1 < len(matches) else len(text)]
-        flat = re.sub(r"\s+", " ", chunk).strip()
-
-        # Cases, deaths and both dates must be explicitly present.
-        tail = re.search(
-            r"\b(?P<cases>\d{1,7})\s+(?P<deaths>\d{1,6})\s+"
-            r"(?P<start>\d{2}-\d{2}-\s*\d{4})\s+"
-            r"(?P<end>\d{2}-\d{2}-\s*\d{4})\b",
-            flat,
-        )
-        if not tail:
-            continue
-
-        state = states.get(match.group(1))
-        if not state:
-            continue
-
-        before_counts = flat[match.end() - match.start():tail.start()].strip()
-        # Match the official state name before attempting to split district/disease.
-        if not before_counts.casefold().startswith(state.casefold() + " "):
-            continue
-        remainder = before_counts[len(state):].strip()
-
-        disease = next(
-            (d for d in diseases if remainder.casefold().endswith(d.casefold())),
-            None,
-        )
-        if not disease:
-            continue
-
-        district = remainder[:-len(disease)].strip()
-        if not district or len(district) > 180:
-            continue
-
-        try:
-            cases = int(tail.group("cases"))
-            deaths = int(tail.group("deaths"))
-            start = datetime.strptime(
-                re.sub(r"\s+", "", tail.group("start")), "%d-%m-%Y"
-            ).date().isoformat()
-            end = datetime.strptime(
-                re.sub(r"\s+", "", tail.group("end")), "%d-%m-%Y"
-            ).date().isoformat()
-        except (ValueError, OverflowError):
-            continue
-
-        if cases < 0 or deaths < 0 or deaths > cases or start > end:
-            continue
-
-        add_candidate(state, district, disease, cases, deaths, start, end, flat)
-
-    # Preserve compatibility with simple tabular text and existing tests.
-    if not result:
-        for raw in (text_content or "").splitlines():
-            line = re.sub(r"\s+", " ", raw).strip()
-            if len(line) < 12 or len(line) > 1000:
-                continue
-            cells = [
-                part.strip()
-                for part in re.split(r"\t+|\s{2,}|\s*\|\s*", raw.strip())
-                if part.strip()
-            ]
-            if cells and cells[0].isdigit():
-                cells = cells[1:]
-            if len(cells) < 5:
-                continue
-            try:
-                cases = parse_count(cells[-2])
-                deaths = parse_count(cells[-1])
-            except ValueError:
-                continue
-            state, district = cells[0], cells[1]
-            disease = " ".join(cells[2:-2]).strip()
-            if not disease or cases is None:
-                continue
-            add_candidate(state, district, disease, cases, deaths, None, None, line)
-
     return result
 
 

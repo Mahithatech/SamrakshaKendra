@@ -607,21 +607,61 @@ export default function App() {
         socket = new WebSocket(wsUrl);
         socket.onopen = () => {
           if (stopped) return;
-          setLiveStatus('live');
-          try { socket.send('ping'); } catch { /* heartbeat will retry */ }
-          heartbeatTimer = setInterval(() => { try { if (socket?.readyState === 1) socket.send('ping'); } catch { /* reconnect handles failures */ } }, SOCKET_HEARTBEAT_MS);
+          setLiveStatus('connecting');
+
+          try {
+            socket.send(JSON.stringify({
+              type: 'authenticate',
+              token,
+            }));
+          } catch {
+            setLiveStatus('offline');
+            try { socket.close(); } catch {}
+          }
         };
+
         socket.onmessage = (event) => {
           try {
             const payload = JSON.parse(event.data);
-            if (payload.type === 'connection_ready' || payload.type === 'pong') return;
+
+            if (payload.type === 'connection_ready') {
+              if (stopped) return;
+              setLiveStatus('live');
+
+              if (heartbeatTimer) clearInterval(heartbeatTimer);
+
+              try {
+                if (socket?.readyState === 1) socket.send('ping');
+              } catch {}
+
+              heartbeatTimer = setInterval(() => {
+                try {
+                  if (socket?.readyState === 1) socket.send('ping');
+                } catch {}
+              }, SOCKET_HEARTBEAT_MS);
+
+              return;
+            }
+
+            if (payload.type === 'pong') return;
+            if (stopped) return;
+
             setLiveEvents((items) => [payload, ...items].slice(0, 20));
-            setLiveNotice(payload.is_synthetic ? 'DEMO ONLY: synthetic event received; no surveillance rows were changed.' : `New screening event received: ${payload.disease || payload.type || 'surveillance event'}.`);
+
+            setLiveNotice(
+              payload.is_synthetic
+                ? 'DEMO ONLY: synthetic event received; no surveillance rows were changed.'
+                : `New screening event received: ${payload.disease || payload.type || 'surveillance event'}.`
+            );
+
             refreshData();
             if (tab === 'trends') refreshTrends();
             if (tab === 'history') refreshHistory();
-          } catch { /* ignore non-JSON frames */ }
+          } catch {
+            // Ignore malformed or non-JSON frames.
+          }
         };
+
         socket.onerror = () => setLiveStatus('offline');
         socket.onclose = () => {
           if (heartbeatTimer) clearInterval(heartbeatTimer);

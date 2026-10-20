@@ -1,7 +1,7 @@
 {
   "input_csv": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_staging_2026_w01.csv",
   "qa_csv": "C:\\Users\\Mahit\\SamrakshaKendra\\data\\ncdc_outbreak_staging_2026_w01_qa.csv",
-  "generated_at_utc": "2026-10-13T19:33:14Z",
+  "generated_at_utc": "2026-10-15T22:12:32Z",
   "rows_examined": 29,
   "rows_needing_review": 13,
   "rows_without_automatic_flags_still_need_source_pdf_verification": 16,

@@ -1,25 +1,26 @@
-SAMRAKSHA KENDRA — EXPLICIT NCDC PROMOTION WORKFLOW
+SAMRAKSHA KENDRA - MOBILE COMPANION KIT
 
-Copy the contents of this archive (tools/, data/, docs/) into the root of:
-C:\Users\Mahit\SamrakshaKendra
+WHAT IT ADDS
+- React Native / Expo Android and iOS companion in mobile-app/
+- Overview metrics using the existing deployed API
+- Public-health Evidence Assistant with send button/Enter and data citations
+- WHO/NCDC source status and source links
+- Starter interface localization: English, Telugu, Kannada and Hindi
+- API safety tests, mobile test command, Android JS bundle export, and GitHub Actions check
 
-If data\ncdc_week1_approval_manifest.csv does not already exist, copy:
-data\ncdc_week1_approval_manifest_TEMPLATE.csv
-into data\ncdc_week1_approval_manifest.csv. Keep the template file as-is.
+INSTALL
+1. Extract this ZIP into the project root (C:\Users\Mahit\SamrakshaKendra).
+2. Open PowerShell in that project root and run:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Finish_Mobile_Companion.ps1
+3. The script installs npm dependencies, runs tests, checks Expo compatibility, exports the Android JS bundle, and commits/pushes only mobile app/docs/workflow files if all prior steps pass.
+4. To run on your phone after successful installation:
+   cd mobile-app
+   npx expo start
+   Scan the QR code with Expo Go. Use a development build if your Expo Go version does not support SDK 57.
 
-1) Run unit tests:
-.\backend\.venv\Scripts\python.exe -m unittest discover -s .\tools -p "test_promote_ncdc_staging.py" -v
-
-2) The approval manifest intentionally has blank approval fields. Do not fill them until each row's fields have been checked against the official NCDC PDF and approved for the project. Fill the following for each row approved for promotion:
-- approved_by: reviewer/approver name or role
-- approved_at_utc: ISO timestamp including timezone (e.g. 2026-10-16T10:30:00+05:30)
-- source_pdf_checked: true
-- approval_note: substantive note confirming state/district/disease/cases/deaths and dates were checked
-
-3) Dry-run, no database writes:
-.\backend\.venv\Scripts\python.exe .\tools\promote_ncdc_staging.py
-
-4) Live insert requires all records to have explicit manifest approvals and both flags:
-.\backend\.venv\Scripts\python.exe .\tools\promote_ncdc_staging.py --apply --confirm PROMOTE-APPROVED-NCDC-ROWS
-
-The script promotes only approved rows. Rows without complete approval are ignored; partial approvals fail. It skips record IDs already in idsp_surveillance. It never infers a missing case count. Existing staging values and statuses change only for rows successfully inserted into live surveillance. Review the project's week/date semantics before operational use. Automatic PDF extraction is not implemented by this tool.
+SAFETY / LIMITS
+- No database URL, admin password, auth token, or private data is embedded in the mobile client.
+- The app calls the existing public aggregate APIs and existing deterministic Evidence Assistant.
+- This builds/tests a mobile companion MVP; it is not a store-ready APK/IPA and needs actual phone testing.
+- It does not implement MobileNetV2 image classification or a generative LLM/RAG pipeline.
+- Public surveillance counters are scoped to the dataset loaded by Samraksha Kendra, not national real-time totals.
