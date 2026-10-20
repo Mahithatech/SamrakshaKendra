@@ -32,7 +32,7 @@ app = FastAPI(
 )
 
 # Authentication is enforced for every HTTP endpoint except login and API docs.
-_PUBLIC_HTTP_PATHS = {"/", "/auth/login", "/docs", "/openapi.json", "/redoc", "/favicon.ico"}
+_PUBLIC_HTTP_PATHS = {"/", "/auth/login", "/docs", "/openapi.json", "/redoc", "/favicon.ico", "/internal/pipeline/run-scheduled"}
 
 @app.middleware("http")
 async def require_bearer_token(request: Request, call_next):
