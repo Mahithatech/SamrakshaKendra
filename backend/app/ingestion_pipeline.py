@@ -206,15 +206,23 @@ def parse_reporting_period(text_content: str, report_year: int | None, report_we
     if not isinstance(report_year, int) or not isinstance(report_week, int):
         return None, None
     pattern = re.compile(
-        r"(?<!\\d)(\\d{1,2})(?:st|nd|rd|th|ᵗʰ)?\\s+([A-Za-z]+)\\s+(20\\d{2})"
-        r"\\s+to\\s+(\\d{1,2})(?:st|nd|rd|th|ᵗʰ)?\\s+([A-Za-z]+)\\s+(20\\d{2})(?!\\d)",
+        r"(?<!\d)(\d{1,2})(?:st|nd|rd|th|ᵗʰ)?\s+([A-Za-z]{3,9})\s+(20\d{2})"
+        r"\s+to\s+(\d{1,2})(?:st|nd|rd|th|ᵗʰ)?\s+([A-Za-z]+)\s+(20\d{2})(?!\d)",
         re.IGNORECASE,
     )
     for match in pattern.finditer(text_content or ""):
         day1, month1, year1, day2, month2, year2 = match.groups()
         try:
-            start = datetime.strptime(f"{day1} {month1} {year1}", "%d %B %Y").date()
-            end = datetime.strptime(f"{day2} {month2} {year2}", "%d %B %Y").date()
+            def parse_month_date(day: str, month: str, year: str) -> date:
+                for month_format in ("%B", "%b"):
+                    try:
+                        return datetime.strptime(f"{day} {month} {year}", f"%d {month_format} %Y").date()
+                    except ValueError:
+                        pass
+                raise ValueError("unrecognized month name")
+
+            start = parse_month_date(day1, month1, year1)
+            end = parse_month_date(day2, month2, year2)
         except ValueError:
             continue
         if start > end or (end - start).days > 14:
