@@ -32,7 +32,7 @@ class IngestionPipelineHelpersTests(unittest.TestCase):
         self.assertFalse(is_allowed_source_url("https://user@ncdc.mohfw.gov.in/report.pdf", "NCDC"))
 
     def test_report_period_from_official_ncdc_url(self):
-        self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week37_179.pdf"), (2026, 34))
+        self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week34_179.pdf"), (2026, 34))
         self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/report.pdf", "NCDC Weekly Report 2025 Week 9"), (2025, 9))
         self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/report.pdf", "unknown report"), (None, None))
 
@@ -86,7 +86,7 @@ class IngestionPipelineHelpersTests(unittest.TestCase):
         text = "(7th September 2026 to 13th September 2026)\nKarnataka    Mysuru    Chickenpox    51    0\nState    District    Disease    Cases    Deaths"
         rows = parse_candidate_lines(
             text,
-            "https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week34_179.pdf",
+            "https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week37_179.pdf",
             "NCDC Weekly Outbreak Report 2026 Week 37",
             "f" * 64,
         )
