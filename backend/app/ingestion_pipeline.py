@@ -197,6 +197,36 @@ def parse_report_period(url: str, title: str = "") -> tuple[int | None, int | No
     return year, week
 
 
+def parse_reporting_period(text_content: str, report_year: int | None, report_week: int | None) -> tuple[date | None, date | None]:
+    """Read the explicit reporting window printed in an NCDC weekly PDF.
+
+    Never infer dates from the PDF publication timestamp. The extracted range must
+    agree with the report's ISO year/week; otherwise it remains unknown for review.
+    """
+    if not isinstance(report_year, int) or not isinstance(report_week, int):
+        return None, None
+    pattern = re.compile(
+        r"(?<!\\d)(\\d{1,2})(?:st|nd|rd|th|ᵗʰ)?\\s+([A-Za-z]+)\\s+(20\\d{2})"
+        r"\\s+to\\s+(\\d{1,2})(?:st|nd|rd|th|ᵗʰ)?\\s+([A-Za-z]+)\\s+(20\\d{2})(?!\\d)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text_content or ""):
+        day1, month1, year1, day2, month2, year2 = match.groups()
+        try:
+            start = datetime.strptime(f"{day1} {month1} {year1}", "%d %B %Y").date()
+            end = datetime.strptime(f"{day2} {month2} {year2}", "%d %B %Y").date()
+        except ValueError:
+            continue
+        if start > end or (end - start).days > 14:
+            continue
+        if (start.isocalendar().year, start.isocalendar().week) != (report_year, report_week):
+            continue
+        if (end.isocalendar().year, end.isocalendar().week) != (report_year, report_week):
+            continue
+        return start, end
+    return None, None
+
+
 def parse_count(value: str | None) -> int | None:
     """Strictly parse a count while preserving blank/dash/NA as unknown, not zero."""
     value = (value or "").strip().replace(",", "")
@@ -264,6 +294,7 @@ def parse_candidate_lines(text_content: str, source_url: str, title: str = "", s
     if not is_allowed_source_url(source_url, "NCDC"):
         return []
     year, week = parse_report_period(source_url, title)
+    reporting_start, reporting_end = parse_reporting_period(text_content, year, week)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in (text_content or "").splitlines():
@@ -303,8 +334,8 @@ def parse_candidate_lines(text_content: str, source_url: str, title: str = "", s
             "disease": disease[:180],
             "cases": cases,
             "deaths": deaths,
-            "reporting_start_date": None,
-            "reporting_end_date": None,
+            "reporting_start_date": reporting_start,
+            "reporting_end_date": reporting_end,
             "raw_excerpt": line[:1000],
         }
         validation_errors = validate_candidate(candidate)
