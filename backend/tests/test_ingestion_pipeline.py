@@ -16,6 +16,7 @@ from app.ingestion_pipeline import (  # noqa: E402
     parse_candidate_lines,
     parse_count,
     parse_report_period,
+    parse_reporting_period,
     pipeline_interval_seconds,
     source_fingerprint,
     validate_candidate,
@@ -34,6 +35,20 @@ class IngestionPipelineHelpersTests(unittest.TestCase):
         self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week34_179.pdf"), (2026, 34))
         self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/report.pdf", "NCDC Weekly Report 2025 Week 9"), (2025, 9))
         self.assertEqual(parse_report_period("https://ncdc.mohfw.gov.in/report.pdf", "unknown report"), (None, None))
+
+    def test_parse_reporting_period_from_explicit_weekly_header(self):
+        report_text = "WEEKLY OUTBREAK REPORT\\n(7ᵗʰ September 2026 to 13ᵗʰ September 2026)\\n37th Week"
+        self.assertEqual(
+            parse_reporting_period(report_text, 2026, 37),
+            (date(2026, 9, 7), date(2026, 9, 13)),
+        )
+
+    def test_reporting_period_refuses_mismatched_or_missing_dates(self):
+        self.assertEqual(
+            parse_reporting_period("(31st August 2026 to 6th September 2026)", 2026, 37),
+            (None, None),
+        )
+        self.assertEqual(parse_reporting_period("date not shown", 2026, 37), (None, None))
 
     def test_counts_preserve_unknown_not_zero(self):
         self.assertIsNone(parse_count(""))
@@ -68,19 +83,21 @@ class IngestionPipelineHelpersTests(unittest.TestCase):
         self.assertIn("deaths_negative", errors)
 
     def test_parser_creates_pending_review_candidate_not_live_data(self):
-        text = "Karnataka    Mysuru    Chickenpox    51    0\nState    District    Disease    Cases    Deaths"
+        text = "(7th September 2026 to 13th September 2026)\nKarnataka    Mysuru    Chickenpox    51    0\nState    District    Disease    Cases    Deaths"
         rows = parse_candidate_lines(
             text,
-            "https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week34_179.pdf",
-            "NCDC Weekly Outbreak Report 2026 Week 34",
+            "https://ncdc.mohfw.gov.in/uploads/weekly_outbreaks/2026/week37_179.pdf",
+            "NCDC Weekly Outbreak Report 2026 Week 37",
             "f" * 64,
         )
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["state"], rows[0]["district"], rows[0]["disease"]), ("Karnataka", "Mysuru", "Chickenpox"))
         self.assertEqual(rows[0]["cases"], 51)
         self.assertEqual(rows[0]["deaths"], 0)
-        self.assertEqual(rows[0]["validation_status"], "needs_review")
-        self.assertIn("reporting_dates_unverified", rows[0]["validation_errors"])
+        self.assertEqual(rows[0]["reporting_start_date"], date(2026, 9, 7))
+        self.assertEqual(rows[0]["reporting_end_date"], date(2026, 9, 13))
+        self.assertEqual(rows[0]["validation_status"], "passed_preliminary_checks")
+        self.assertEqual(rows[0]["validation_errors"], [])
 
     def test_parser_refuses_nonofficial_urls(self):
         rows = parse_candidate_lines("Karnataka    Mysuru    Chickenpox    51    0", "https://attacker.example/x.pdf", "")
