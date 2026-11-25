@@ -895,7 +895,7 @@ async def _worker_loop() -> None:
         if SYNTHETIC_GENERATION_ENABLED:
             try:
                 await asyncio.to_thread(ensure_synthetic_schema)
-                result = await asyncio.to_thread(generate_synthetic_records)
+                result = await asyncio.to_thread(generate_synthetic_records, records_per_cycle=48)
                 logger.info("Synthetic generation status=%s created=%s",result.get("status"),result.get("created"))
             except asyncio.CancelledError:
                 raise
