@@ -8,7 +8,8 @@ import re
 import asyncio
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -29,6 +30,8 @@ from .ingestion_pipeline import (
     pipeline_interval_seconds,
     run_pipeline_cycle,
 )
+
+from .synthetic_ingestion import generate_synthetic_records
 
 router = APIRouter(tags=["Automated Source Ingestion Pipeline"])
 
@@ -211,7 +214,17 @@ async def run_pipeline_scheduled(x_pipeline_token: str | None = Header(default=N
         raise HTTPException(status_code=503, detail="Scheduled runner secret is not configured on the API service")
     if not cron_token_matches(configured, x_pipeline_token):
         raise HTTPException(status_code=403, detail="Scheduled runner token rejected")
+    india_today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    period_start = india_today - timedelta(days=india_today.weekday())
+
+    synthetic_result = await asyncio.to_thread(
+        generate_synthetic_records,
+        records_per_cycle=48,
+        period_start=period_start,
+    )
+
     result = await asyncio.to_thread(run_pipeline_cycle)
+    result["synthetic_generation"] = synthetic_result
     result["event_delivery"] = await emit_pending_events()
     return result
 

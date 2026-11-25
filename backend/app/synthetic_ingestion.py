@@ -1,4 +1,4 @@
-
+﻿
 """Synthetic surveillance data generator for Samraksha Kendra.
 
 Synthetic records are kept separate from official IDSP/NCDC records.
@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import random
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Boolean,
@@ -207,7 +208,7 @@ def generate_synthetic_records(
 
     ensure_synthetic_schema()
 
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     start = period_start or (today - timedelta(days=today.weekday()))
     if start > today or start.weekday() != 0:
         raise ValueError("period_start must be a Monday no later than today")
