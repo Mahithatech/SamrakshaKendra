@@ -17,6 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import IDSPSurveillance
+from app.synthetic_ingestion import SyntheticSurveillance
+from app.gemini_service import generate_gemini_answer
+from app.config import GEMINI_SURVEILLANCE_EXPLANATIONS
 
 router = APIRouter(prefix="/public/assistant", tags=["Evidence Assistant"])
 Language = Literal["en", "te", "kn", "hi"]
@@ -39,31 +42,115 @@ def match_label(question: str, labels: list[str]) -> str | None:
         if re.search(pattern, q, flags=re.UNICODE):
             return label
     return None
+def is_greeting(question: str) -> bool:
+    q = normalize_question(question)
 
+    greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "hii",
+        "hiii",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "how are u",
+        "how r u",
+        "what's up",
+        "whats up",
+        "thanks",
+        "thank you",
+    }
+
+    return q in greetings
+
+    return q in greetings
+def is_farewell(question: str) -> bool:
+    q = normalize_question(question)
+
+    farewells = {
+        "bye",
+        "goodbye",
+        "good bye",
+        "see you",
+        "see you later",
+        "take care",
+    }
+
+    return q in farewells
 
 def classify_intent(question: str) -> str:
     q = normalize_question(question)
+    comparison_terms = (
+    "compare", "comparison", "difference", "differences", "diff",
+    "versus", " vs ", "vs.",
+)
+
+    official_terms = ("official", "offical", "idsp")
+    synthetic_terms = ("synthetic", "sythetic", "simulated")
+
+    if (
+        any(term in q for term in comparison_terms)
+        and any(term in q for term in official_terms)
+        and any(term in q for term in synthetic_terms)
+    ):
+        return "compare_sources"
+
+    if (
+        any(term in q for term in synthetic_terms)
+        or "synthetic records" in q
+        or "synthetic data" in q
+    ):
+        return "synthetic_summary"
+
     top_disease = (
-        "top disease", "top diseases", "most reported disease", "most reported diseases",
-        "highest cases by disease", "highest reported cases", "which disease has the highest reported cases", "leading disease", "most common disease",
-        "అత్యధికంగా నివేదించిన వ్యాధి", "అత్యధిక కేసులున్న వ్యాధులు", "అత్యధికంగా నివేదించిన వ్యాధులు", "ಹೆಚ್ಚು ವರದಿಯಾದ ರೋಗ", "सबसे अधिक रिपोर्ट की गई बीमारी", "सबसे अधिक रिपोर्ट की गई बीमारियाँ", "सबसे अधिक रिपोर्ट की गई बीमारियां",
+        "top disease", "top diseases", "most reported disease",
+        "most reported diseases", "highest cases by disease",
+        "highest reported cases", "which disease has the highest reported cases",
+        "leading disease", "most common disease",
+        "ಅತ್ಯಧಿಕ ಪ್ರಕರಣಗಳ ರೋಗ",
+        "सबसे अधिक रिपोर्ट की गई बीमारी",
     )
+
     top_state = (
-        "top state", "top states", "highest cases by state", "most affected state",
-        "state with most cases", "which state has the most affected cases", "which state has highest cases", "most affected cases", "అత్యధిక కేసులున్న రాష్ట్రం", "అత్యధిక కేసులున్న రాష్ట్రాలు", "ಅತ್ಯಧಿಕ ಪ್ರಕರಣಗಳ ರಾಜ್ಯ", "ಅತ್ಯಧಿಕ ಪ್ರಕರಣಗಳ ರಾಜ್ಯಗಳು", "सबसे अधिक मामलों वाला राज्य", "सबसे अधिक मामलों वाले राज्य",
+        "top state", "top states", "highest cases by state",
+        "most affected state", "state with most cases",
+        "which state has the most affected cases",
+        "which state has highest cases", "most affected cases",
+        "అత్యధిక కేసులున్న రాష్ట్రం",
+        "सबसे अधिक मामलों वाला राज्य",
     )
+
     trend = (
-        "trend", "weekly", "reporting week", "recent weeks", "over time", "history",
-        "ధోరణి", "వారాల వారీ", "ಪ್ರವೃತ್ತಿ", "ವಾರವಾರು", "रुझान", "साप्ताहिक",
+        "trend", "weekly", "reporting week", "recent weeks",
+        "over time", "history", "week by week",
+        "ధోరణి", "వారాల వారీ", "ಪ್ರವೃತ್ತಿ", "ವಾರವಾರು",
+        "रुझान", "साप्ताहिक",
     )
+
     if any(term in q for term in top_disease):
         return "top_disease"
+
     if any(term in q for term in top_state):
         return "top_state"
+
     if any(term in q for term in trend):
         return "trend"
-    return "summary"
 
+    surveillance_terms = (
+        "summary", "summarize", "overall", "total", "cases",
+        "deaths", "records", "dataset", "surveillance",
+        "reported", "idsp", "disease data", "state data",
+        "outbreak data", "how many", "case count",
+        "సారాంశం", "మొత్తం", "కేసులు", "మరణాలు",
+        "सारांश", "कुल", "मामले", "मौतें",
+    )
+
+    if any(term in q for term in surveillance_terms):
+        return "summary"
+
+    return "general"
 
 _STRINGS = {
     "en": {
@@ -152,13 +239,230 @@ def ask_evidence_assistant(payload: AssistantQuestion, db: Session = Depends(get
 
     language = payload.language if payload.language in _STRINGS else "en"
     s = _STRINGS[language]
+
+    if is_greeting(question):
+        greeting_answer = (
+            "Hello! I'm the Samraksha Kendra Evidence Assistant. "
+            "I can help explore the loaded IDSP surveillance data, "
+            "compare reported cases by state or disease, and explain this project. "
+            "What would you like to know?"
+        )
+        if normalize_question(question) == "hi":
+            return {
+                "status": "help",
+                "mode": "help",
+                "question": question,
+                "language": language,
+                "answer": s["help"],
+                "items": [],
+                "filters": {"state": None, "district": None, "disease": None},
+                "sources": [],
+                "disclaimer": "Help suggestions, not a surveillance finding or medical advice.",
+                "note": "Static help response."
+            }
+
+        return {
+            "status": "answered",
+            "mode": "greeting",
+            "question": question,
+            "language": language,
+            "answer": greeting_answer,
+            "items": [],
+            "filters": {"state": None, "district": None, "disease": None},
+            "sources": [],
+            "disclaimer": "This is a conversational greeting, not a surveillance finding or medical advice.",
+            "note": "Static greeting response; no LLM inference was performed."
+        }
+
+    if is_farewell(question):
+        return {
+            "status": "answered",
+            "mode": "farewell",
+            "question": question,
+            "language": language,
+            "answer": "Goodbye! Thank you for using Samraksha Kendra. Stay safe!",
+            "items": [],
+            "filters": {"state": None, "district": None, "disease": None},
+            "sources": [],
+            "disclaimer": "This is a conversational response, not a surveillance finding or medical advice.",
+            "note": "Static farewell response; no LLM inference was performed."
+        }
+
+    intent = classify_intent(question)
+
+    if intent == "general":
+        try:
+            answer = generate_gemini_answer(
+                question=question,
+                language=language,
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="The AI assistant is temporarily unavailable. Please try again shortly.",
+            )
+
+        return {
+            "status": "answered",
+            "mode": "gemini_general",
+            "question": question,
+            "language": language,
+            "answer": answer,
+            "items": [],
+            "filters": {
+                "state": None,
+                "district": None,
+                "disease": None,
+            },
+            "sources": [],
+            "disclaimer": "General AI-generated information. Not medical advice or an official public-health finding.",
+            "note": "General response generated using Gemini. No surveillance statistics were queried.",
+        }
+
+
     all_states = [x[0] for x in db.query(IDSPSurveillance.state).distinct().all() if x[0]]
     all_districts = [x[0] for x in db.query(IDSPSurveillance.district).distinct().all() if x[0]]
     all_diseases = [x[0] for x in db.query(IDSPSurveillance.disease).distinct().all() if x[0]]
+
     state = match_label(question, all_states)
     district = match_label(question, all_districts)
     disease = match_label(question, all_diseases)
     intent = classify_intent(question)
+
+    # Build a separate query for synthetic demonstration records.
+    synthetic_query = db.query(SyntheticSurveillance).filter(
+        SyntheticSurveillance.is_synthetic.is_(True)
+    )
+
+    if state:
+        synthetic_query = synthetic_query.filter(
+            SyntheticSurveillance.state.ilike(state)
+        )
+    if district:
+        synthetic_query = synthetic_query.filter(
+            SyntheticSurveillance.district.ilike(district)
+        )
+    if disease:
+        synthetic_query = synthetic_query.filter(
+            SyntheticSurveillance.disease.ilike(disease)
+        )
+
+    if intent in ("synthetic_summary", "compare_sources"):
+        synthetic_stats = synthetic_query.with_entities(
+            func.count(SyntheticSurveillance.id).label("records"),
+            func.coalesce(func.sum(SyntheticSurveillance.cases), 0).label("cases"),
+            func.coalesce(func.sum(SyntheticSurveillance.deaths), 0).label("deaths"),
+            func.count(func.distinct(SyntheticSurveillance.state)).label("states"),
+            func.count(func.distinct(SyntheticSurveillance.disease)).label("diseases"),
+        ).one()
+
+        synthetic_data = {
+            "source": "Synthetic demonstration data",
+            "records": int(synthetic_stats.records or 0),
+            "cases": int(synthetic_stats.cases or 0),
+            "deaths": int(synthetic_stats.deaths or 0),
+            "states": int(synthetic_stats.states or 0),
+            "diseases": int(synthetic_stats.diseases or 0),
+            "is_synthetic": True,
+        }
+
+        if intent == "synthetic_summary":
+            answer = (
+                "Synthetic demonstration data summary:\n"
+                f"- Records: {synthetic_data['records']}\n"
+                f"- Reported cases: {synthetic_data['cases']}\n"
+                f"- Reported deaths: {synthetic_data['deaths']}\n"
+                f"- States/UTs represented: {synthetic_data['states']}\n"
+                f"- Diseases represented: {synthetic_data['diseases']}\n\n"
+                "These are simulated records generated for demonstration "
+                "and testing. They are not official IDSP surveillance findings."
+            )
+
+            return {
+                "status": "answered",
+                "mode": "synthetic_summary",
+                "question": question,
+                "language": language,
+                "answer": answer,
+                "items": [synthetic_data],
+                "filters": {
+                    "state": state,
+                    "district": district,
+                    "disease": disease,
+                },
+                "sources": [],
+                "disclaimer": (
+                    "Synthetic demonstration data only. "
+                    "Not official IDSP data or a real outbreak declaration."
+                ),
+                "note": "Queried only sk_synthetic_surveillance.",
+            }
+
+        official_query = db.query(IDSPSurveillance)
+
+        if state:
+            official_query = official_query.filter(
+                IDSPSurveillance.state.ilike(state)
+            )
+        if district:
+            official_query = official_query.filter(
+                IDSPSurveillance.district.ilike(district)
+            )
+        if disease:
+            official_query = official_query.filter(
+                IDSPSurveillance.disease.ilike(disease)
+            )
+
+        official_stats = official_query.with_entities(
+            func.count(IDSPSurveillance.id).label("records"),
+            func.coalesce(func.sum(IDSPSurveillance.cases), 0).label("cases"),
+            func.coalesce(func.sum(IDSPSurveillance.deaths), 0).label("deaths"),
+        ).one()
+
+        official_data = {
+            "source": "Official IDSP dataset",
+            "records": int(official_stats.records or 0),
+            "cases": int(official_stats.cases or 0),
+            "deaths": int(official_stats.deaths or 0),
+            "is_synthetic": False,
+        }
+
+        answer = (
+            "Official IDSP and synthetic demonstration data comparison:\n\n"
+            "Official IDSP dataset:\n"
+            f"- Records: {official_data['records']}\n"
+            f"- Reported cases: {official_data['cases']}\n"
+            f"- Reported deaths: {official_data['deaths']}\n\n"
+            "Synthetic demonstration dataset:\n"
+            f"- Records: {synthetic_data['records']}\n"
+            f"- Reported cases: {synthetic_data['cases']}\n"
+            f"- Reported deaths: {synthetic_data['deaths']}\n\n"
+            "Important: These datasets are stored and calculated separately. "
+            "Synthetic figures are simulated and must not be interpreted "
+            "as real public-health statistics."
+        )
+
+        return {
+            "status": "answered",
+            "mode": "source_comparison",
+            "question": question,
+            "language": language,
+            "answer": answer,
+            "items": [official_data, synthetic_data],
+            "filters": {
+                "state": state,
+                "district": district,
+                "disease": disease,
+            },
+            "sources": [],
+            "disclaimer": (
+                "Official IDSP and synthetic demonstration data are "
+                "separate. Synthetic figures are not real surveillance findings."
+            ),
+            "note": "Both datasets queried independently; no records were combined.",
+        }
+
+    q = db.query(IDSPSurveillance)
 
     q = db.query(IDSPSurveillance)
     if state:
@@ -245,6 +549,45 @@ def ask_evidence_assistant(payload: AssistantQuestion, db: Session = Depends(get
         answer = s["help"]
         answer_status = "help"
 
+    database_answer = answer
+    ai_note = "Deterministic database answer."
+
+    if GEMINI_SURVEILLANCE_EXPLANATIONS and answer_status == "answered":
+        verified_context = f"""
+        Original database-calculated answer:
+        {database_answer}
+
+        Verified database aggregation results:
+        {items}
+
+        Matched filters:
+        State: {state}
+        District: {district}
+        Disease: {disease}
+
+        IMPORTANT:
+        The database results are authoritative.
+        Preserve every number exactly.
+        Do not describe the data as synthetic unless the supplied
+        evidence explicitly identifies it as synthetic.
+        Do not add unsupported findings.
+        """
+
+        try:
+            gemini_answer = generate_gemini_answer(
+                question=question,
+                context=verified_context,
+                language=language,
+            )
+
+            if gemini_answer:
+                answer = f"{database_answer}\n\nAdditional explanation:\n{gemini_answer}"
+                ai_note = "Database statistics calculated by SQL; additional explanation generated using Gemini."
+
+        except Exception:
+            answer = database_answer
+            ai_note = "Gemini temporarily unavailable; original database answer retained."
+
     return {
         "status": answer_status,
         "mode": "retrieval_and_aggregation",
@@ -255,5 +598,5 @@ def ask_evidence_assistant(payload: AssistantQuestion, db: Session = Depends(get
         "filters": {"state": state, "district": district, "disease": disease},
         "sources": _safe_sources(evidence_rows, language),
         "disclaimer": s["disclaimer"],
-        "note": "Answers are generated from stored structured IDSP rows and deterministic aggregation; no LLM inference or diagnosis is performed.",
+        "note": ai_note,
     }

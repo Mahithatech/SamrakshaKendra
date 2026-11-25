@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -20,7 +21,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from .anomaly_service import (
@@ -30,6 +31,7 @@ from .anomaly_service import (
 from .database import get_db
 from .ica_service import ICAInputError, run_ica_analysis
 from .models import IDSPSurveillance
+from .synthetic_ingestion import LOCATIONS, SyntheticSurveillance
 from .websocket_manager import manager
 from .auth_security import decode_access_token
 
@@ -90,8 +92,35 @@ def _serialise(row: IDSPSurveillance) -> dict[str, Any]:
         "source": row.source,
         "source_url": row.source_url,
     }
+def _serialise_synthetic(row: SyntheticSurveillance) -> dict[str, Any]:
+    return {
+        "record_id": row.record_id,
+        "year": row.year,
+        "week": row.week,
+        "reporting_start_date": row.reporting_start_date.isoformat(),
+        "reporting_end_date": row.reporting_end_date.isoformat(),
+        "state": row.state,
+        "district": row.district,
+        "disease": row.disease,
+        "cases": int(row.cases or 0),
+        "deaths": int(row.deaths or 0),
+        "outbreak_status": row.outbreak_status,
+        "source": "SYNTHETIC_GENERATOR",
+        "source_url": None,
+        "is_synthetic": True,
+    }
 
 
+
+def _synthetic_records_for_analysis(db: Session) -> list[dict[str, Any]]:
+    """Load only explicitly labelled synthetic records for anomaly screening."""
+    rows = (
+        db.query(SyntheticSurveillance)
+        .filter(SyntheticSurveillance.is_synthetic.is_(True))
+        .all()
+    )
+
+    return [_serialise_synthetic(row) for row in rows]
 def _records_for_analysis(db: Session) -> list[dict[str, Any]]:
     rows = db.query(IDSPSurveillance).all()
 
@@ -119,12 +148,59 @@ def _records_for_analysis(db: Session) -> list[dict[str, Any]]:
 def synthetic_anomaly_screening_demo():
     """Run a deterministic detector test; does not query or change the database."""
     return run_synthetic_anomaly_screening_fixture()
+@router.get(
+    "/analytics/anomalies/synthetic",
+    summary="Screen synthetic surveillance records for simulated anomalies",
+)
+def synthetic_historical_anomalies(
+    min_history: int = Query(default=4, ge=2, le=4),
+    db: Session = Depends(get_db),
+):
+    records = _synthetic_records_for_analysis(db)
 
+    anomalies = detect_case_anomalies(
+        records,
+        min_history=min_history,
+    )
+
+    diagnostics = get_anomaly_diagnostics(
+        records,
+        min_history=min_history,
+    )
+
+    for item in anomalies:
+        item["is_synthetic"] = True
+        item["source"] = "SYNTHETIC_GENERATOR"
+        item["signal_type"] = "SIMULATED_ANOMALY"
+
+    if diagnostics["valid_source_records"] == 0:
+        status = "no_synthetic_records"
+    elif diagnostics["evaluable_periods"] == 0:
+        status = "insufficient_synthetic_history"
+    elif anomalies:
+        status = "synthetic_signals_detected"
+    else:
+        status = "no_synthetic_signals_detected"
+
+    return {
+        "method": "Trailing median + robust MAD",
+        "status": status,
+        "is_synthetic": True,
+        "count": len(anomalies),
+        "items": anomalies,
+        "diagnostics": diagnostics,
+        "caution": (
+            "SIMULATED DATA ONLY. These results are not official surveillance "
+            "findings, confirmed outbreaks, or public-health alerts. "
+            "They must not be mixed with official anomaly events."
+        ),
+    }
 
 @router.get(
     "/public/surveillance",
     summary="Browse public aggregate surveillance records",
 )
+
 def public_surveillance(
     state: str | None = None,
     district: str | None = None,
@@ -132,39 +208,94 @@ def public_surveillance(
     year: int | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=100),
+    source: str = Query(default="official"),
     db: Session = Depends(get_db),
 ):
-    query = _filtered_query(
-        db,
-        state=state,
-        district=district,
-        disease=disease,
-        year=year,
-    )
-
-    total = query.count()
-
-    rows = (
-        query.order_by(
-            IDSPSurveillance.year.desc(),
-            IDSPSurveillance.week.desc(),
-            IDSPSurveillance.state.asc(),
-            IDSPSurveillance.disease.asc(),
+    if source not in {"official", "synthetic", "all"}:
+        raise HTTPException(
+            status_code=400,
+            detail="source must be official, synthetic, or all",
         )
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
+
+    records = []
+
+    # Official records remain separate.
+    if source in {"official", "all"}:
+        query = _filtered_query(
+            db,
+            state=state,
+            district=district,
+            disease=disease,
+            year=year,
+        )
+
+        official_rows = query.all()
+
+        records.extend(
+            {
+                **_serialise(row),
+                "is_synthetic": False,
+            }
+            for row in official_rows
+        )
+
+    # Synthetic records come from their own database table.
+    if source in {"synthetic", "all"}:
+        synthetic_query = db.query(SyntheticSurveillance)
+
+        if state:
+            synthetic_query = synthetic_query.filter(
+                SyntheticSurveillance.state.ilike(f"%{state}%")
+            )
+        if district:
+            synthetic_query = synthetic_query.filter(
+                SyntheticSurveillance.district.ilike(f"%{district}%")
+            )
+        if disease:
+            synthetic_query = synthetic_query.filter(
+                SyntheticSurveillance.disease.ilike(f"%{disease}%")
+            )
+        if year is not None:
+            synthetic_query = synthetic_query.filter(
+                SyntheticSurveillance.year == year
+            )
+
+        synthetic_rows = synthetic_query.all()
+        records.extend(_serialise_synthetic(row) for row in synthetic_rows)
+
+    # Newest year/week first; keep state and disease alphabetical.
+    records.sort(
+        key=lambda item: (
+            -int(item["year"] or 0),
+            -int(item["week"] or 0),
+            item["state"] or "",
+            item["disease"] or "",
+        )
     )
+
+    total = len(records)
+    start = (page - 1) * page_size
+    page_items = records[start : start + page_size]
 
     return {
-        "items": [_serialise(row) for row in rows],
+        "items": page_items,
         "page": page,
         "page_size": page_size,
         "total": total,
         "pages": (total + page_size - 1) // page_size,
+        "source_filter": source,
         "data_note": (
-            "Aggregate surveillance records only; source availability "
-            "and completeness may vary."
+            "Synthetic records are generated sample data and are not "
+            "official outbreak reports."
+            if source == "synthetic"
+            else (
+                "Official and synthetic records are shown together. "
+                "Synthetic records are explicitly labelled."
+                if source == "all"
+                else
+                "Official aggregate surveillance records only; source "
+                "availability and completeness may vary."
+            )
         ),
     }
 
@@ -273,9 +404,57 @@ def public_surveillance_summary(
         }
         for row in reversed(trend_rows)
     ]
+        # Global dataset counts (independent of dashboard filters)
+    idsp_total = db.query(IDSPSurveillance).count()
+
+    approved_ncdc_count = (
+        db.query(IDSPSurveillance)
+        .filter(
+            IDSPSurveillance.source.like(
+                "NCDC/IDSP weekly %"
+            )
+        )
+        .count()
+    )
+
+    official_idsp_count = idsp_total - approved_ncdc_count
+
+    synthetic_count = (
+        db.query(SyntheticSurveillance)
+        .filter(SyntheticSurveillance.is_synthetic.is_(True))
+        .count()
+    )
+
+    # Pending NCDC staging records; safely handle a missing staging table
+    staging_table_exists = db.execute(
+        text("SELECT to_regclass('public.ncdc_outbreak_staging')")
+    ).scalar()
+
+    pending_ncdc_count = 0
+
+    if staging_table_exists:
+        pending_ncdc_count = db.execute(
+            text("""
+                SELECT COUNT(*)
+                FROM public.ncdc_outbreak_staging
+                WHERE review_status = :status
+            """),
+            {"status": "pending_supervisor_review"},
+        ).scalar() or 0
+
+    total_live_records = (
+        official_idsp_count
+        + approved_ncdc_count
+        + synthetic_count
+    )
 
     return {
         "total_records": int(total_records),
+        "official_idsp_records": int(official_idsp_count),
+        "approved_ncdc_records": int(approved_ncdc_count),
+        "synthetic_records": int(synthetic_count),
+        "pending_ncdc_records": int(pending_ncdc_count),
+        "total_live_records": int(total_live_records),
         "total_cases": int(total_cases),
         "total_deaths": int(total_deaths),
         "states_count": int(states_count),
@@ -302,7 +481,56 @@ def public_surveillance_summary(
         ),
     }
 
+@router.get(
+    "/public/surveillance/synthetic/state-coverage",
+    summary="State-wise synthetic surveillance record counts",
+)
+def synthetic_state_coverage(
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(
+            SyntheticSurveillance.state,
+            func.count(SyntheticSurveillance.id).label("records"),
+        )
+        .filter(SyntheticSurveillance.is_synthetic.is_(True))
+        .group_by(SyntheticSurveillance.state)
+        .all()
+    )
 
+    record_counts = {
+        state: int(count)
+        for state, count in rows
+    }
+
+    coverage = [
+        {
+            "state": state,
+            "records": record_counts.get(state, 0),
+        }
+        for state in LOCATIONS
+    ]
+
+    coverage.sort(
+        key=lambda item: (-item["records"], item["state"])
+    )
+
+    return {
+        "source": "SYNTHETIC_GENERATOR",
+        "is_synthetic": True,
+        "total_states_uts": len(LOCATIONS),
+        "covered_states_uts": sum(
+            1 for item in coverage if item["records"] > 0
+        ),
+        "total_records": sum(
+            item["records"] for item in coverage
+        ),
+        "coverage": coverage,
+        "data_note": (
+            "Illustrative synthetic records only. "
+            "These counts are not official disease surveillance reports."
+        ),
+    }
 @router.get(
     "/public/surveillance/export.csv",
     summary="Download filtered public aggregate data as CSV",

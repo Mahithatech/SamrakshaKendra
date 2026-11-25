@@ -18,3 +18,10 @@ elif _database_url.startswith("postgresql://"):
     _database_url = "postgresql+psycopg://" + _database_url[len("postgresql://"):]
 
 DATABASE_URL = _database_url
+DATABASE_DIRECT_URL = os.getenv("DATABASE_DIRECT_URL", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_SURVEILLANCE_EXPLANATIONS = (
+    os.getenv("GEMINI_SURVEILLANCE_EXPLANATIONS", "false").strip().lower()
+    == "true"
+)

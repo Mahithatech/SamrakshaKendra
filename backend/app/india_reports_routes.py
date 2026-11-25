@@ -196,7 +196,7 @@ def _request_ncdc_reports() -> list[dict[str, Any]]:
         row["archive_url"] = NCDC_ARCHIVE_URL
         row["source"] = "National Centre for Disease Control (NCDC), Government of India — IDSP weekly outbreak reports"
     rows.sort(key=lambda item: (item.get("year") or 0, item.get("week") or 0, item["title"]), reverse=True)
-    return rows[:100]
+    return rows
 
 
 def _parse_cache_time(value: Any) -> datetime | None:

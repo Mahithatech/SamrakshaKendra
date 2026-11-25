@@ -1,3 +1,4 @@
+from fastapi.openapi.utils import get_openapi
 import asyncio
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -30,29 +31,95 @@ app = FastAPI(
     ),
     version="1.0.0"
 )
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
 
-# Authentication is enforced for every HTTP endpoint except login and API docs.
-_PUBLIC_HTTP_PATHS = {"/", "/auth/login", "/docs", "/openapi.json", "/redoc", "/favicon.ico", "/internal/pipeline/run-scheduled"}
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+    }
+
+    for path_item in openapi_schema["paths"].values():
+        for operation in path_item.values():
+            if isinstance(operation, dict) and "responses" in operation:
+                operation["security"] = [{"BearerAuth": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+
+# Authentication is enforced for all protected HTTP endpoints.
+_PUBLIC_HTTP_PATHS = {
+    "/",
+    "/auth/login",
+    "/auth/register",
+    "/auth/user/login",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/favicon.ico",
+    "/internal/pipeline/run-scheduled",
+    "/public/india-outbreak-reports",
+}
+
 
 @app.middleware("http")
 async def require_bearer_token(request: Request, call_next):
     path = request.url.path
-    if request.method == "OPTIONS" or path in _PUBLIC_HTTP_PATHS or path.startswith("/docs/"):
+
+    if (
+        request.method == "OPTIONS"
+        or path in _PUBLIC_HTTP_PATHS
+        or path.startswith("/docs/")
+    ):
         response = await call_next(request)
+
     else:
         auth_header = request.headers.get("authorization", "")
         scheme, _, token = auth_header.partition(" ")
-        claims = decode_access_token(token.strip()) if scheme.lower() == "bearer" and token.strip() else None
+
+        claims = (
+            decode_access_token(token.strip())
+            if scheme.lower() == "bearer" and token.strip()
+            else None
+        )
+
         if not claims:
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authentication required. Sign in to continue."},
+                content={
+                    "detail": "Authentication required. Sign in to continue."
+                },
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        # All /admin endpoints require an administrator account.
+        if path.startswith("/admin/") and claims.get("role") != "admin":
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Administrator access required."},
+            )
+
         response = await call_next(request)
+
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
+
     return response
 
 

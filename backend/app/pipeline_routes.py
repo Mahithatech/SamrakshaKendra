@@ -4,7 +4,7 @@ In the current app, a global bearer-token middleware protects HTTP routes. These
 endpoints still require a valid reviewer token; they never disable authentication.
 """
 from __future__ import annotations
-
+import re
 import asyncio
 import json
 import os
@@ -32,11 +32,35 @@ from .ingestion_pipeline import (
 
 router = APIRouter(tags=["Automated Source Ingestion Pipeline"])
 
+def _insert_audit(
+    connection,
+    candidate_id: str,
+    action: str,
+    actor: str,
+    note: str,
+    details: dict | None = None,
+) -> None:
+    connection.execute(
+        text("""
+            INSERT INTO public.sk_candidate_audit
+                (audit_id, candidate_id, action, actor, action_at, note, details)
+            VALUES
+                (gen_random_uuid()::text, :candidate_id, :action, :actor,
+                 NOW(), :note, CAST(:details AS jsonb))
+        """),
+        {
+            "candidate_id": candidate_id,
+            "action": action,
+            "actor": actor,
+            "note": note,
+            "details": json.dumps(details or {}),
+        },
+    )
+
 
 class CandidateDecision(BaseModel):
     action: Literal["approve", "reject"]
     reviewer_note: str = Field(min_length=8, max_length=1500)
-
 
 class CandidateCorrection(BaseModel):
     report_year: int = Field(ge=2000, le=2100)
@@ -50,6 +74,10 @@ class CandidateCorrection(BaseModel):
     deaths: int | None = Field(default=None, ge=0)
     correction_note: str = Field(min_length=8, max_length=1500)
 
+
+class CandidatePromotion(BaseModel):
+    duplicate_override: bool = False
+    override_reason: str | None = Field(default=None, max_length=1500)
 
 def _reviewer_from_header(authorization: str | None) -> str:
     if not authorization:
@@ -66,15 +94,112 @@ def _reviewer_from_header(authorization: str | None) -> str:
 def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
 
+def _extract_ncdc_record_id(raw_excerpt: str | None) -> str | None:
+    """Extract the original NCDC identifier at the beginning of an excerpt."""
+    if not raw_excerpt:
+        return None
 
-def _insert_audit(connection, candidate_id: str, action: str, actor: str, note: str, details: dict | None = None) -> datetime:
-    now = datetime.now(timezone.utc)
-    connection.execute(text("""
-        INSERT INTO public.sk_candidate_audit (audit_id, candidate_id, action, actor, action_at, note, details)
-        VALUES (:id, :candidate_id, :action, :actor, :now, :note, CAST(:details AS JSONB))
-    """), {"id": __import__("uuid").uuid4().hex, "candidate_id": candidate_id, "action": action,
-          "actor": actor, "now": now, "note": note[:1500], "details": json.dumps(details or {})})
-    return now
+    match = re.match(
+        r"^\s*([A-Za-z]{2,3}/[A-Za-z]{2,3}/\d{4}/\d{1,2}/\d+)\b",
+        str(raw_excerpt),
+    )
+    return match.group(1).upper() if match else None
+
+
+def _find_candidate_duplicates(connection, candidate: dict) -> list[dict]:
+    """
+    Find possible duplicates in live IDSP, legacy staging and candidate staging.
+
+    Original NCDC record ID equality is the strongest identity match.
+    Matching core outbreak fields without the same ID is only a possible match.
+    """
+    source_id = _extract_ncdc_record_id(candidate.get("raw_excerpt"))
+
+    common = {
+        "year": candidate["report_year"],
+        "week": candidate["report_week"],
+        "state": str(candidate["state"]).strip().casefold(),
+        "district": str(candidate["district"]).strip().casefold(),
+        "disease": str(candidate["disease"]).strip().casefold(),
+    }
+
+    matches = []
+
+    queries = [
+        (
+            "live_idsp",
+            """
+            SELECT record_id, year, week, state, district, disease,
+                   cases, deaths, reporting_start_date, reporting_end_date
+            FROM public.idsp_surveillance
+            WHERE year=:year AND week=:week
+              AND LOWER(TRIM(state))=:state
+              AND LOWER(TRIM(district))=:district
+              AND LOWER(TRIM(disease))=:disease
+            """,
+        ),
+        (
+            "legacy_staging",
+            """
+            SELECT record_id, report_year AS year, report_week AS week,
+                   state, district, disease, cases, deaths,
+                   outbreak_start_date AS reporting_start_date,
+                   reporting_date AS reporting_end_date
+            FROM public.ncdc_outbreak_staging
+            WHERE report_year=:year AND report_week=:week
+              AND LOWER(TRIM(state))=:state
+              AND LOWER(TRIM(district))=:district
+              AND LOWER(TRIM(disease))=:disease
+            """,
+        ),
+        (
+            "other_candidates",
+            """
+            SELECT candidate_id, raw_excerpt, report_year AS year,
+                   report_week AS week, state, district, disease,
+                   cases, deaths, reporting_start_date, reporting_end_date
+            FROM public.sk_ingestion_candidates
+            WHERE report_year=:year AND report_week=:week
+              AND LOWER(TRIM(state))=:state
+              AND LOWER(TRIM(district))=:district
+              AND LOWER(TRIM(disease))=:disease
+              AND candidate_id<>:candidate_id
+            """,
+        ),
+    ]
+
+    params = {
+        **common,
+        "candidate_id": candidate["candidate_id"],
+    }
+
+    for table_name, sql in queries:
+        rows = connection.execute(text(sql), params).mappings().all()
+
+        for row in rows:
+            row = dict(row)
+
+            if table_name == "other_candidates":
+                matched_id = _extract_ncdc_record_id(row.get("raw_excerpt"))
+                reference = row.get("candidate_id")
+            else:
+                matched_id = str(row.get("record_id") or "").strip().upper()
+                reference = row.get("record_id")
+
+            exact_id = bool(source_id and matched_id and source_id == matched_id)
+
+            matches.append({
+                "table": table_name,
+                "reference": reference,
+                "original_ncdc_id": matched_id,
+                "match_type": "exact_match" if exact_id else "possible_match",
+                "cases": row.get("cases"),
+                "deaths": row.get("deaths"),
+                "reporting_start_date": _iso(row.get("reporting_start_date")),
+                "reporting_end_date": _iso(row.get("reporting_end_date")),
+            })
+
+    return matches
 
 
 @router.post("/internal/pipeline/run-scheduled", summary="Run the pipeline from a configured external scheduler")
@@ -163,11 +288,49 @@ def pipeline_candidates(
                    validation_errors, review_status, reviewed_by, reviewed_at, reviewer_note,
                    promoted_record_id, created_at, updated_at
             FROM public.sk_ingestion_candidates {where}
-            ORDER BY created_at DESC LIMIT :limit
+            ORDER BY report_year DESC, report_week DESC, created_at DESC
+            LIMIT :limit
         """), {"limit": limit, **({"review_status": review_status} if review_status else {})}).mappings().all()
     return {"items": [dict(row) for row in rows], "count": len(rows),
             "note": "Candidate extraction may be incomplete or misaligned by PDF text extraction. Check the cited source PDF before approval."}
 
+
+@router.get(
+    "/admin/pipeline/candidates/{candidate_id}/duplicates",
+    summary="Preview possible duplicates without changing records",
+)
+def preview_candidate_duplicates(
+    candidate_id: str,
+    authorization: str | None = Header(default=None),
+):
+    ensure_pipeline_schema()
+    _reviewer_from_header(authorization)
+
+    with engine.begin() as connection:
+        row = connection.execute(text("""
+            SELECT *
+            FROM public.sk_ingestion_candidates
+            WHERE candidate_id = :id
+        """), {"id": candidate_id}).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+
+        candidate = dict(row)
+        matches = _find_candidate_duplicates(connection, candidate)
+
+    exact = [m for m in matches if m["match_type"] == "exact_match"]
+    possible = [m for m in matches if m["match_type"] == "possible_match"]
+
+    return {
+        "candidate_id": candidate_id,
+        "duplicate_count": len(matches),
+        "exact_matches": exact,
+        "possible_matches": possible,
+        "safe_to_review": True,
+        "promotion_allowed_without_override": len(matches) == 0,
+        "note": "Read-only preview. No records were inserted, updated, or deleted."
+    }
 
 @router.post("/admin/pipeline/run", summary="Run source discovery, validation and anomaly screening immediately")
 async def run_pipeline_now():
@@ -189,8 +352,11 @@ def decide_candidate(candidate_id: str, decision: CandidateDecision, authorizati
         """), {"id": candidate_id}).mappings().first()
         if not candidate:
             raise HTTPException(status_code=404, detail="Candidate not found")
-        if candidate["review_status"] == "promoted":
-            raise HTTPException(status_code=409, detail="Promoted candidates cannot be reviewed again")
+        if candidate["review_status"] != "pending_supervisor_review":
+            raise HTTPException(
+                status_code=409,
+                detail="Only pending candidates can be approved or rejected.",
+                )
         errors = candidate["validation_errors"] or []
         if isinstance(errors, str):
             try: errors = json.loads(errors)
@@ -265,84 +431,240 @@ def correct_candidate(candidate_id: str, correction: CandidateCorrection, author
     return {"candidate_id": candidate_id, "validation_status": status, "validation_errors": errors,
             "reviewer": reviewer, "message": "Corrected values are still staged. Approve them separately after verifying the official PDF."}
 
-
-@router.post("/admin/pipeline/candidates/{candidate_id}/promote", summary="Explicitly promote an approved NCDC candidate")
-async def promote_candidate(candidate_id: str, authorization: str | None = Header(default=None)):
+@router.post(
+    "/admin/pipeline/candidates/{candidate_id}/promote",
+    summary="Explicitly promote an approved NCDC candidate with duplicate protection",
+)
+async def promote_candidate(
+    candidate_id: str,
+    promotion: CandidatePromotion = CandidatePromotion(),
+    authorization: str | None = Header(default=None),
+):
     ensure_pipeline_schema()
     reviewer = _reviewer_from_header(authorization)
+
     with engine.begin() as connection:
+
         row = connection.execute(text("""
-            SELECT * FROM public.sk_ingestion_candidates WHERE candidate_id=:id FOR UPDATE
+            SELECT *
+            FROM public.sk_ingestion_candidates
+            WHERE candidate_id=:id
+            FOR UPDATE
         """), {"id": candidate_id}).mappings().first()
+
         if not row:
             raise HTTPException(status_code=404, detail="Candidate not found")
+
         row = dict(row)
+
         if row.get("review_status") == "promoted" and row.get("promoted_record_id"):
-            return {"candidate_id": candidate_id, "record_id": row["promoted_record_id"], "status": "already_promoted"}
+            return {
+                "candidate_id": candidate_id,
+                "record_id": row["promoted_record_id"],
+                "status": "already_promoted",
+            }
+
         if row.get("review_status") != "approved":
-            raise HTTPException(status_code=409, detail="A human reviewer must approve the candidate before promotion")
+            raise HTTPException(
+                status_code=409,
+                detail="A human reviewer must approve the candidate before promotion",
+            )
+
         if row.get("validation_status") != "passed_preliminary_checks" or row.get("validation_errors"):
-            raise HTTPException(status_code=422, detail="Candidate has not passed preliminary validation")
+            raise HTTPException(
+                status_code=422,
+                detail="Candidate has not passed preliminary validation",
+            )
+
         if row.get("cases") is None:
-            raise HTTPException(status_code=422, detail="Case count is unknown; cannot promote this candidate")
+            raise HTTPException(
+                status_code=422,
+                detail="Case count is unknown; cannot promote this candidate",
+            )
+
         if not is_allowed_source_url(row.get("source_url", ""), "NCDC"):
-            raise HTTPException(status_code=422, detail="Source is not an allowlisted official NCDC HTTPS URL")
-        year, week = int(row["report_year"]), int(row["report_week"])
-        start_date, end_date = row.get("reporting_start_date"), row.get("reporting_end_date")
+            raise HTTPException(
+                status_code=422,
+                detail="Source is not an allowlisted official NCDC HTTPS URL",
+            )
+
+        year = int(row["report_year"])
+        week = int(row["report_week"])
+        start_date = row.get("reporting_start_date")
+        end_date = row.get("reporting_end_date")
+
         if not start_date or not end_date:
-            raise HTTPException(status_code=422, detail="Source reporting dates have not been explicitly verified; correct the candidate before promotion")
+            raise HTTPException(
+                status_code=422,
+                detail="Source reporting dates have not been explicitly verified",
+            )
+
         if start_date > end_date or (end_date - start_date).days > 14:
-            raise HTTPException(status_code=422, detail="Source reporting date range is invalid")
+            raise HTTPException(
+                status_code=422,
+                detail="Source reporting date range is invalid",
+            )
+
+        # Serialize application-level promotions for the same outbreak identity.
+        lock_key = (
+            f"{year}|{week}|{str(row['state']).strip().casefold()}|"
+            f"{str(row['district']).strip().casefold()}|"
+            f"{str(row['disease']).strip().casefold()}"
+        )
+
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": lock_key},
+        )
+
+        # Recheck all three tables inside the promotion transaction.
+        duplicates = _find_candidate_duplicates(connection, row)
+
+        if duplicates:
+            reason = str(promotion.override_reason or "").strip()
+
+            if not promotion.duplicate_override or len(reason) < 8:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            "Potential duplicate records were found. "
+                            "Review the matches before promotion. "
+                            "A supervisor override with a written reason is required."
+                        ),
+                        "duplicate_count": len(duplicates),
+                        "matches": duplicates,
+                        "override_required": True,
+                    },
+                )
+
         record_id = f"AUTO-NCDC-{candidate_id[:40]}"
         source_name = "NCDC/IDSP weekly report (human-reviewed candidate)"
+
         insert = connection.execute(text("""
             INSERT INTO public.idsp_surveillance (
                 record_id, year, week, reporting_start_date, reporting_end_date,
-                state, district, disease, cases, deaths, outbreak_status, source, source_url
+                state, district, disease, cases, deaths,
+                outbreak_status, source, source_url
             ) VALUES (
                 :record_id, :year, :week, :start_date, :end_date,
-                :state, :district, :disease, :cases, :deaths, :outbreak_status, :source, :source_url
-            ) ON CONFLICT (record_id) DO NOTHING
+                :state, :district, :disease, :cases, :deaths,
+                :outbreak_status, :source, :source_url
+            )
+            ON CONFLICT (record_id) DO NOTHING
         """), {
-            "record_id": record_id, "year": year, "week": week, "start_date": start_date, "end_date": end_date,
-            "state": row["state"], "district": row["district"], "disease": row["disease"],
-            "cases": row["cases"], "deaths": row["deaths"], "outbreak_status": "Human-reviewed candidate; not an official declaration",
-            "source": source_name, "source_url": row["source_url"],
+            "record_id": record_id,
+            "year": year,
+            "week": week,
+            "start_date": start_date,
+            "end_date": end_date,
+            "state": row["state"],
+            "district": row["district"],
+            "disease": row["disease"],
+            "cases": row["cases"],
+            "deaths": row["deaths"],
+            "outbreak_status": "Human-reviewed candidate; not an official declaration",
+            "source": source_name,
+            "source_url": row["source_url"],
         })
+
         if insert.rowcount == 0:
-            # An existing record_id is safe only if this candidate already has a promotion link.
-            existing = connection.execute(text("SELECT id FROM public.idsp_surveillance WHERE record_id=:id"), {"id": record_id}).first()
+            existing = connection.execute(
+                text("SELECT id FROM public.idsp_surveillance WHERE record_id=:id"),
+                {"id": record_id},
+            ).first()
+
             if not existing:
-                raise HTTPException(status_code=409, detail="Promotion conflict; no live record was changed")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Promotion conflict; no live record was changed",
+                )
+
         promotion_time = datetime.now(timezone.utc)
+
         connection.execute(text("""
-            UPDATE public.sk_ingestion_candidates SET review_status='promoted', promoted_record_id=:record_id,
-                updated_at=:now, reviewed_by=COALESCE(reviewed_by, :reviewer)
+            UPDATE public.sk_ingestion_candidates
+            SET review_status='promoted',
+                promoted_record_id=:record_id,
+                updated_at=:now,
+                reviewed_by=COALESCE(reviewed_by, :reviewer)
             WHERE candidate_id=:id
-        """), {"record_id": record_id, "now": promotion_time, "reviewer": reviewer, "id": candidate_id})
-        _insert_audit(connection, candidate_id, "promoted", reviewer, "Explicitly promoted after source verification.", {"record_id": record_id, "year": year, "week": week, "state": row["state"], "district": row["district"], "disease": row["disease"], "cases": row["cases"], "deaths": row["deaths"]})
-    # The promotion transaction is committed. Queue the event only after the live row exists.
+        """), {
+            "record_id": record_id,
+            "now": promotion_time,
+            "reviewer": reviewer,
+            "id": candidate_id,
+        })
+
+        audit_note = (
+            f"Explicitly promoted after source verification. "
+            f"Duplicate override: {reason}"
+            if duplicates else
+            "Explicitly promoted after source verification. No matching records found."
+        )
+
+        _insert_audit(
+            connection,
+            candidate_id,
+            "promoted",
+            reviewer,
+            audit_note,
+            {
+                "record_id": record_id,
+                "year": year,
+                "week": week,
+                "state": row["state"],
+                "district": row["district"],
+                "disease": row["disease"],
+                "cases": row["cases"],
+                "deaths": row["deaths"],
+                "duplicate_override": bool(duplicates),
+                "override_reason": reason if duplicates else None,
+                "duplicate_matches": duplicates,
+            },
+        )
+
+    # Transaction committed. Broadcast events only after successful promotion.
     _insert_event(f"promoted:{candidate_id}", "surveillance_record_promoted", {
-        "type": "surveillance_record_promoted", "created_at": datetime.now(timezone.utc).isoformat(),
-        "record_id": record_id, "candidate_id": candidate_id, "source_url": row["source_url"],
-        "state": row["state"], "district": row["district"], "disease": row["disease"],
-        "year": year, "week": week, "cases": row["cases"], "deaths": row["deaths"],
-        "reviewed_by": reviewer, "is_synthetic": False,
+        "type": "surveillance_record_promoted",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "record_id": record_id,
+        "candidate_id": candidate_id,
+        "source_url": row["source_url"],
+        "state": row["state"],
+        "district": row["district"],
+        "disease": row["disease"],
+        "year": year,
+        "week": week,
+        "cases": row["cases"],
+        "deaths": row["deaths"],
+        "reviewed_by": reviewer,
+        "is_synthetic": False,
         "message": "A source-verified and explicitly approved candidate was promoted to structured surveillance.",
     })
-    # A newly promoted row is now part of the eligible history. Run screening again and queue events.
+
     try:
         with SessionLocal() as db:
             anomalies = _latest_anomalies(db)
         _persist_anomaly_events(anomalies)
     except Exception:
-        # Promotion has committed. This is a screening failure, not a reason to undo approved data.
         pass
-    delivery = await emit_pending_events()
-    return {"candidate_id": candidate_id, "record_id": record_id, "status": "promoted",
-            "event_delivery": delivery,
-            "note": "Human-reviewed candidate inserted into structured surveillance. Screening alerts still require public-health review."}
 
+    delivery = await emit_pending_events()
+
+    return {
+        "candidate_id": candidate_id,
+        "record_id": record_id,
+        "status": "promoted",
+        "duplicate_override": bool(duplicates),
+        "duplicate_count": len(duplicates),
+        "event_delivery": delivery,
+        "note": (
+            "Candidate promoted after supervisor duplicate override."
+            if duplicates else
+            "Candidate promoted after source verification. No matching records were found."
+        ),
+    }
 
 @router.get("/admin/pipeline/audit", summary="Immutable audit history for candidate corrections, decisions and promotions")
 def pipeline_audit(candidate_id: str | None = None, limit: int = Query(default=100, ge=1, le=500)):

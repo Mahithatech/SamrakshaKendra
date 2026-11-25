@@ -7,37 +7,55 @@ const navItems = [
   { id: 'overview', label: 'Overview', glyph: '◫' },
   { id: 'history', label: 'Historical data', glyph: '▤' },
   { id: 'signals', label: 'Global signals', glyph: '↗' },
-  { id: 'india-reports', label: 'India reports', glyph: '⌂' },
+  { id: 'india-reports', label: 'India reports', glyph: '▧' },
   { id: 'report-review', label: 'Report review queue', glyph: '✓' },
   { id: 'staged-data', label: 'Staged NCDC data', glyph: '▦' },
   { id: 'anomalies', label: 'Anomaly detection', glyph: '⌁' },
-  { id: 'ica', label: 'ICA lab', glyph: '◉' },
-  { id: 'map', label: 'Map & hotspots', glyph: '◎' },
-  { id: 'report-queue', label: 'Report review queue', glyph: '⇣' },
+  { id: 'map', label: 'Map & hotspots', glyph: '⌖' },
   { id: 'assistant', label: 'Evidence assistant', glyph: '✦' },
 ];
-
 async function api(path, options = {}) {
   const { headers: customHeaders = {}, ...fetchOptions } = options;
+
+  const publicAuthPaths = [
+    '/auth/login',
+    '/auth/register',
+    '/auth/user/login',
+  ];
+
+  const isPublicAuth = publicAuthPaths.includes(path);
   const token = sessionStorage.getItem('sk_access_token');
+
   const headers = {
     'Content-Type': 'application/json',
-    ...(token && path !== '/auth/login' ? { Authorization: `Bearer ${token}` } : {}),
+    ...(token && !isPublicAuth
+      ? { Authorization: `Bearer ${token}` }
+      : {}),
     ...customHeaders,
   };
-  const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...fetchOptions,
+    headers,
+  });
+
   const body = await response.json().catch(() => ({}));
+
   if (!response.ok) {
-    if (response.status === 401 && path !== '/auth/login') {
+    if (response.status === 401 && !isPublicAuth) {
       sessionStorage.removeItem('sk_access_token');
       window.dispatchEvent(new Event('sk-auth-expired'));
     }
-    const detail = typeof body.detail === 'string' ? body.detail : `Request failed (${response.status})`;
+
+    const detail = typeof body.detail === 'string'
+      ? body.detail
+      : `Request failed (${response.status})`;
+
     throw new Error(detail);
   }
+
   return body;
 }
-
 function formatNumber(value) {
   return new Intl.NumberFormat('en-IN').format(Number(value || 0));
 }
@@ -181,6 +199,7 @@ function IndiaMapHotspots() {
   const [mapData, setMapData] = useState(null);
   const [anomalies, setAnomalies] = useState([]);
   const [selectedState, setSelectedState] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('official');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -189,10 +208,10 @@ function IndiaMapHotspots() {
     setRefreshing(true);
     setError('');
     try {
-      const first = await api('/public/surveillance?page=1&page_size=100');
+      const first = await api(`/public/surveillance?page=1&page_size=100&source=${sourceFilter}`);
       const pageCount = Math.max(1, Number(first.pages || 1));
       const rest = await Promise.all(Array.from({ length: pageCount - 1 }, (_, index) =>
-        api(`/public/surveillance?page=${index + 2}&page_size=100`)
+        api(`/public/surveillance?page=${index + 2}&page_size=100&source=${sourceFilter}`)
       ));
       const allRecords = [ ...(first.items || []), ...rest.flatMap((result) => result.items || []) ];
       const periods = allRecords.map((row) => ({
@@ -237,7 +256,7 @@ function IndiaMapHotspots() {
           diseases: item.diseases.size,
           period_end: item.periodEnd || latest.end || null,
           sources: Array.from(item.sources),
-        })).sort((a, b) => (b.cases ?? -1) - (a.cases ?? -1));
+        })).sort((a, b) => (b.cases || 0) - (a.cases || 0));
         setMapData({
           period: `Year ${latest.year}, week ${String(latest.week).padStart(2, '0')}`,
           periodKey: latestKey,
@@ -249,8 +268,15 @@ function IndiaMapHotspots() {
         });
       }
       try {
-        const result = await api('/analytics/anomalies');
-        setAnomalies((result.items || []).filter((item) => !item.is_synthetic && item.type !== 'demo_anomaly'));
+        const anomalyEndpoint = sourceFilter === 'synthetic'
+        ? '/analytics/anomalies/synthetic'
+        : '/analytics/anomalies';
+        const result = await api(anomalyEndpoint);
+        setAnomalies((result.items || []).filter((item) =>
+          sourceFilter === 'synthetic'
+        ? item.is_synthetic === true
+        : !item.is_synthetic && item.type !== 'demo_anomaly'
+      ));
       } catch {
         setAnomalies([]);
       }
@@ -260,7 +286,7 @@ function IndiaMapHotspots() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [sourceFilter]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -271,7 +297,7 @@ function IndiaMapHotspots() {
   }, [mapData]);
 
   const hotspotKeys = useMemo(() => new Set(anomalies.map((item) => canonicalMapName(item.state)).filter(Boolean)), [anomalies]);
-  const maxCases = useMemo(() => Math.max(1, ...(mapData?.rows || []).map((row) => Number(row.cases ?? 0))), [mapData]);
+  const maxCases = useMemo(() => Math.max(1, ...(mapData?.rows || []).map((row) => Number(row.cases || 0))), [mapData]);
   const mapMarkers = useMemo(() => {
     const candidateNames = new Map();
     for (const row of mapData?.rows || []) {
@@ -321,9 +347,31 @@ function IndiaMapHotspots() {
       {error && <div className="alert-banner error-banner"><strong>Map data issue</strong><span>{error}</span></div>}
       <section className="panel">
         <div className="panel-heading map-panel-heading"><div><span className="eyebrow">LATEST AVAILABLE PERIOD</span><h3>{mapData?.period || (loading ? 'Loading reporting period…' : 'No period available')}</h3>
-          <p className="muted small">{mapData?.sourceRows ?? 0} source rows · {mapData?.totalStates ?? 0} states/UT labels with records{mapData?.periodEnd ? ` · latest end date ${mapData.periodEnd}` : ''}</p>
-        </div><button className="button button-outline" disabled={refreshing} onClick={refresh}>{refreshing ? 'Refreshing…' : 'Refresh map data'}</button></div>
-        <p className="map-disclaimer">Glowing markers are approximate state-centroid locations, not exact case locations. Marker size reflects known case totals for the latest available reporting week; bright red markers also indicate historical statistical anomaly candidates. These are screening aids, not confirmed outbreaks. Missing values remain unknown.</p>
+          <p className="muted small">{mapData?.sourceRows || 0} source rows · {mapData?.totalStates || 0} states/UT labels with records{mapData?.periodEnd ? ` · latest end date ${mapData.periodEnd}` : ''}</p>
+       </div>
+<div className="map-controls">
+  <select
+    value={sourceFilter}
+    onChange={(event) => {
+      setSourceFilter(event.target.value);
+      setSelectedState('');
+    }}
+    aria-label="Map data source"
+  >
+    <option value="official">Official data</option>
+    <option value="synthetic">Synthetic demo data</option>
+  </select>
+  <button className="button button-outline" disabled={refreshing} onClick={refresh}>
+    {refreshing ? 'Refreshing…' : 'Refresh map data'}
+  </button>
+</div>
+</div>
+        <p className="map-disclaimer">
+  {sourceFilter === 'synthetic'
+    ? 'SIMULATED DATA ONLY. This map displays generated sample records, not official surveillance reports. Synthetic anomaly results are experimental screening outputs, not confirmed outbreaks or public-health alerts.'
+    : 'OFFICIAL DATA VIEW. This map displays official aggregate surveillance records available in this installation. Historical statistical anomaly candidates are screening aids, not confirmed outbreaks. Missing values remain unknown.'}
+  {' '}Markers show approximate state-centroid locations, not exact case locations.
+</p>
         {loading && !mapData ? <div className="loading-line"><span className="spinner" /> Loading geographic data…</div> : (
           <div className="map-layout">
             <div className="india-map-wrap">
@@ -376,7 +424,7 @@ function IndiaMapHotspots() {
               <div className="map-hotspot-list"><div className="map-list-title"><div><span className="eyebrow">STATISTICAL SCREENING</span><h3>Potential hotspots</h3></div><Badge tone={topHotspots.length ? 'warning' : 'neutral'}>{topHotspots.length}</Badge></div>
                 <p className="muted small">Candidates from historical time-series anomaly screening. These may be from an earlier week than the map and require human review.</p>
                 {topHotspots.length ? topHotspots.map((item, index) => <button className="map-hotspot-row" key={`${item.state}-${item.disease}-${item.year}-${item.week}-${index}`} onClick={() => setSelectedState(item.state || '')}>
-                  <span className="map-hotspot-number">{index + 1}</span><span className="map-hotspot-text"><strong>{item.state || 'Unknown state'}</strong><small>{item.district ? `${item.district} · ` : ''}{item.disease || 'Disease not labelled'} · {item.year || 'Year ?'} W{item.week ?? '?'}</small></span><span className="map-hotspot-cases">{item.cases == null ? '—' : formatNumber(item.cases)}</span>
+                  <span className="map-hotspot-number">{index + 1}</span><span className="map-hotspot-text"><strong>{item.state || 'Unknown state'}</strong><small>{item.district ? `${item.district} · ` : ''}{item.disease || 'Disease not labelled'} · {item.year || 'Year ?'} W{item.week || '?'}</small></span><span className="map-hotspot-cases">{item.cases == null ? '—' : formatNumber(item.cases)}</span>
                 </button>) : <EmptyState title="No candidates returned" body="No eligible historical anomaly candidate is available from the current API result. This does not prove there is no outbreak." />}
               </div>
             </aside>
@@ -386,106 +434,6 @@ function IndiaMapHotspots() {
     </div>
   );
 }
-
-
-function NCDCReportReviewQueue() {
-  const [queue, setQueue] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
-  const [filter, setFilter] = useState('pending_review');
-  const [savingId, setSavingId] = useState('');
-  const [notesById, setNotesById] = useState({});
-
-  const refresh = useCallback(async (quiet = false) => {
-    if (!quiet) setRefreshing(true);
-    setError('');
-    try {
-      const params = new URLSearchParams({ limit: '300' });
-      if (filter !== 'all') params.set('status', filter);
-      const result = await api(`/admin/ncdc-report-queue?${params.toString()}`);
-      setQueue(result);
-    } catch (err) {
-      setError(err.message || 'Could not load the NCDC report review queue.');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [filter]);
-
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(() => refresh(true), 60000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
-
-  const updateReview = async (item, status) => {
-    setSavingId(item.report_id);
-    setError('');
-    try {
-      await api(`/admin/ncdc-report-queue/items/${encodeURIComponent(item.report_id)}/review`, {
-        method: 'POST',
-        body: JSON.stringify({ status, notes: notesById[item.report_id] || item.review_notes || '' }),
-      });
-      await refresh(true);
-    } catch (err) {
-      setError(err.message || 'Could not update this report review.');
-    } finally {
-      setSavingId('');
-    }
-  };
-
-  const counts = queue?.counts || {};
-  return (
-    <div className="report-queue-page">
-      <section className="hero-compact report-queue-hero">
-        <div><Badge tone="blue">OFFICIAL SOURCE WORKFLOW</Badge><h2>NCDC report review queue</h2>
-          <p>New weekly report links are discovered by the background source refresh and saved here for review.</p>
-        </div><div className="report-queue-symbol">⇣</div>
-      </section>
-      <section className="panel report-queue-panel">
-        <div className="panel-heading">
-          <div><span className="eyebrow">SOURCE DISCOVERY</span><h3>Reports awaiting review</h3>
-            <p className="muted small">Last queue sync: {formatDateTime(queue?.last_sync_at)} · Source status: {queue?.source_status || 'not checked'}</p>
-          </div>
-          <button className="button button-outline" disabled={refreshing} onClick={() => refresh()}>{refreshing ? 'Refreshing…' : 'Refresh queue'}</button>
-        </div>
-        <div className="report-queue-summary">
-          <button className={filter === 'pending_review' ? 'queue-filter active' : 'queue-filter'} onClick={() => setFilter('pending_review')}><strong>{formatNumber(counts.pending_review)}</strong><span>Pending review</span></button>
-          <button className={filter === 'reviewed' ? 'queue-filter active' : 'queue-filter'} onClick={() => setFilter('reviewed')}><strong>{formatNumber(counts.reviewed)}</strong><span>Marked reviewed</span></button>
-          <button className={filter === 'ignored' ? 'queue-filter active' : 'queue-filter'} onClick={() => setFilter('ignored')}><strong>{formatNumber(counts.ignored)}</strong><span>Ignored</span></button>
-          <button className={filter === 'all' ? 'queue-filter active' : 'queue-filter'} onClick={() => setFilter('all')}><strong>{formatNumber(queue?.counts ? Object.values(queue.counts).reduce((a, b) => a + Number(b || 0), 0) : 0)}</strong><span>All queued</span></button>
-        </div>
-        <div className="report-queue-warning"><strong>Important:</strong> This queue tracks official PDF discovery and human review only. Marking a report reviewed does not extract or import case/death counts. Only validated records imported through the staging workflow appear in surveillance totals and map values.</div>
-        {error && <div className="alert-banner error-banner"><strong>Queue issue</strong><span>{error}</span></div>}
-        {loading ? <div className="loading-line"><span className="spinner" /> Loading source review queue…</div> : (
-          <div className="report-queue-list">
-            {(queue?.items || []).map((item) => (
-              <article className="report-queue-card" key={item.report_id}>
-                <div className="report-queue-card-main">
-                  <div className="report-queue-card-title"><Badge tone={item.status === 'pending_review' ? 'warning' : item.status === 'reviewed' ? 'success' : 'neutral'}>{item.status.replace('_', ' ')}</Badge>
-                    <strong>{item.title || 'NCDC weekly outbreak report'}</strong></div>
-                  <p className="muted small">{item.year ? `Year ${item.year}` : 'Year not identified'}{item.week ? ` · Week ${item.week}` : ''} · First seen {formatDateTime(item.first_seen_at)}</p>
-                  <a className="source-link" href={item.url} target="_blank" rel="noreferrer">Open official NCDC PDF ↗</a>
-                  <label className="report-queue-notes">Review notes<textarea rows={2} maxLength={2000} value={notesById[item.report_id] ?? item.review_notes ?? ''} onChange={(event) => setNotesById((prev) => ({ ...prev, [item.report_id]: event.target.value }))} placeholder="e.g. reporting period checked; table needs manual extraction" /></label>
-                </div>
-                <div className="report-queue-actions">
-                  {item.status !== 'reviewed' && <button className="button button-primary" disabled={savingId === item.report_id} onClick={() => updateReview(item, 'reviewed')}>{savingId === item.report_id ? 'Saving…' : 'Mark reviewed'}</button>}
-                  {item.status !== 'ignored' && <button className="button button-quiet" disabled={savingId === item.report_id} onClick={() => updateReview(item, 'ignored')}>Ignore</button>}
-                  {item.status !== 'pending_review' && <button className="button button-quiet" disabled={savingId === item.report_id} onClick={() => updateReview(item, 'pending_review')}>Reopen</button>}
-                </div>
-              </article>
-            ))}
-            {!queue?.items?.length && <EmptyState title="No reports in this view" body={filter === 'pending_review' ? 'No new reports are waiting right now. The queue will update when the background source refresh discovers new official PDFs.' : 'No reports match this status filter yet.'} />}
-          </div>
-        )}
-        {queue?.interpretation && <p className="muted small report-queue-footnote">{queue.interpretation}</p>}
-        <p className="report-queue-attribution">Source archive: <a className="source-link" href="https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php" target="_blank" rel="noreferrer">NCDC / IDSP Weekly Outbreak Reports ↗</a></p>
-      </section>
-    </div>
-  );
-}
-
 
 
 function ReportReviewQueuePanel() {
@@ -560,15 +508,16 @@ function ReportReviewQueuePanel() {
       {notice && <div className="alert-banner info-banner"><strong>Saved</strong><span>{notice}</span><button className="close-notice" aria-label="Dismiss notice" onClick={() => setNotice('')}>×</button></div>}
 
       <section className="metric-grid three-metrics rq-metrics">
-        <MetricCard label="Pending review" value={counts.pending_review ?? 0} footnote="Awaiting human review" accent="rose" glyph="◷" />
-        <MetricCard label="Reviewed" value={counts.reviewed ?? 0} footnote="Review status only; not imported" accent="teal" glyph="✓" />
-        <MetricCard label="Ignored" value={counts.ignored ?? 0} footnote="Retained in queue history" accent="violet" glyph="—" />
+        <MetricCard label="Pending review" value={counts.pending_review || 0} footnote="Awaiting human review" accent="rose" glyph="◷" />
+        <MetricCard label="Reviewed" value={counts.reviewed || 0} footnote="Review status only; not imported" accent="teal" glyph="✓" />
+        <MetricCard label="Ignored" value={counts.ignored || 0} footnote="Retained in queue history" accent="violet" glyph="—" />
       </section>
 
       <section className="panel rq-panel">
+
         <div className="panel-heading rq-toolbar">
           <div><span className="eyebrow">REPORT CATALOGUE</span><h3>Discovered official reports</h3>
-            <p className="muted small">{queue?.total ?? 0} report(s) in the selected view · last queue sync: {formatDateTime(queue?.last_sync_at)}</p>
+            <p className="muted small">{queue?.total || 0} report(s) in the selected view · last queue sync: {formatDateTime(queue?.last_sync_at)}</p>
           </div>
           <div className="rq-toolbar-actions">
             <label className="rq-filter-label">Status
@@ -595,7 +544,7 @@ function ReportReviewQueuePanel() {
                 <div className="rq-meta"><span>First seen: {formatDateTime(item.first_seen_at)}</span><span>Last seen: {formatDateTime(item.last_seen_at)}</span></div>
                 <div className="rq-links"><a className="source-link" href={item.url} target="_blank" rel="noreferrer">Open official PDF ↗</a><a className="source-link" href={item.archive_url || 'https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php'} target="_blank" rel="noreferrer">NCDC archive ↗</a></div>
                 <label className="rq-notes-label">Review notes
-                  <textarea rows={2} maxLength={2000} value={notesById[item.report_id] ?? item.review_notes ?? ''} onChange={(event) => setNotesById((previous) => ({ ...previous, [item.report_id]: event.target.value }))} placeholder="Record source page/table, corrections needed, or supervisor notes…" />
+                  <textarea rows={2} maxLength={2000} value={notesById[item.report_id] || item.review_notes || ''} onChange={(event) => setNotesById((previous) => ({ ...previous, [item.report_id]: event.target.value }))} placeholder="Record source page/table, corrections needed, or supervisor notes…" />
                 </label>
                 <div className="rq-item-actions">
                   <button className="button button-primary" disabled={Boolean(savingId)} onClick={() => saveReview(item, 'reviewed')}>{savingId === item.report_id ? 'Saving…' : 'Mark reviewed'}</button>
@@ -606,7 +555,7 @@ function ReportReviewQueuePanel() {
             </article>
           ))}
         </div>
-        <p className="rq-caution">Important: “Reviewed” records a human review decision only. It does not authorize import into PostgreSQL or mark case counts as confirmed. Use the separate validated staging and explicit-approval workflow.</p>
+        <p className="rq-caution">Important: “Reviewed” records a human review decision only. It does not authorize import into PostgreSQL or mark case counts as confirmed. Use the separate validated staging and explicit-approval workflow.</p>
       </section>
     </div>
   );
@@ -618,6 +567,9 @@ function StagedNcdcPreviewPanel() {
   const [statusFilter, setStatusFilter] = useState('pending_supervisor_review');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [pipelineCandidates, setPipelineCandidates] = useState([]);
+  const [pipelineLoading, setPipelineLoading] = useState(true);
+  const [pipelineError, setPipelineError] = useState('');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -634,6 +586,25 @@ function StagedNcdcPreviewPanel() {
   }, [statusFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  const loadPipelineCandidates = useCallback(async () => {
+  setPipelineLoading(true);
+  setPipelineError('');
+
+  try {
+    const result = await api(
+      '/admin/pipeline/candidates?review_status=pending_supervisor_review&limit=200'
+    );
+    setPipelineCandidates(result.items || []);
+  } catch (err) {
+    setPipelineError(err.message || 'Could not load extracted NCDC candidates.');
+  } finally {
+    setPipelineLoading(false);
+  }
+}, []);
+
+useEffect(() => {
+  loadPipelineCandidates();
+}, [loadPipelineCandidates]);
   const totals = data?.totals || {};
   const states = data?.by_state || [];
   const rows = data?.items || [];
@@ -645,15 +616,125 @@ function StagedNcdcPreviewPanel() {
         <div className="sk-staging-mark" aria-hidden="true">QA</div>
       </section>
       {error && <div className="alert-banner error-banner"><strong>Staging preview issue</strong><span>{error}</span></div>}
+      <section className="panel">
+  <div className="panel-heading">
+    <div>
+      <span className="eyebrow">AUTOMATED PDF EXTRACTION</span>
+      <h3>New NCDC extracted candidates</h3>
+      <p className="muted small">
+        Extracted weekly-report records awaiting human review.
+        These are separate from legacy staging and live surveillance.
+      </p>
+    </div>
+    <button
+      className="button button-outline"
+      onClick={loadPipelineCandidates}
+      disabled={pipelineLoading}
+    >
+      {pipelineLoading ? 'Loading...' : 'Refresh candidates'}
+    </button>
+  </div>
+
+  {pipelineError && (
+    <div className="alert-banner error-banner">
+      <strong>Candidate loading issue</strong>
+      <span>{pipelineError}</span>
+    </div>
+  )}
+
+  <p className="muted small">
+    Pending candidates: {formatNumber(pipelineCandidates.length)}
+    {pipelineCandidates.length === 200 ? ' (display limit reached)' : ''}
+  </p>
+
+  {pipelineLoading && (
+    <div className="loading-line">
+      <span className="spinner" /> Loading extracted candidates...
+    </div>
+  )}
+
+  {!pipelineLoading && !pipelineError && pipelineCandidates.length === 0 && (
+    <EmptyState
+      title="No pending extracted candidates"
+      body="Refresh after the ingestion pipeline processes additional reports."
+    />
+  )}
+
+  {!pipelineLoading && pipelineCandidates.length > 0 && (
+    <div className="sk-staging-table-wrap">
+      <table className="sk-staging-table">
+        <thead>
+          <tr>
+            <th>Report</th>
+            <th>State / District</th>
+            <th>Disease</th>
+            <th>Cases</th>
+            <th>Deaths</th>
+            <th>Validation</th>
+            <th>Source PDF</th>
+          </tr>
+        </thead>
+        <tbody>
+          {pipelineCandidates.map((candidate) => (
+            <tr key={candidate.candidate_id}>
+              <td>
+                <strong>
+                  {candidate.report_year}-W{String(candidate.report_week).padStart(2, '0')}
+                </strong>
+                <small>{candidate.candidate_id}</small>
+              </td>
+              <td>
+                {candidate.state || 'Unknown'}
+                <small>{candidate.district || 'Unknown district'}</small>
+              </td>
+              <td>{candidate.disease || 'Unknown'}</td>
+              <td>{candidate.cases == null ? 'Unknown' : formatNumber(candidate.cases)}</td>
+              <td>{candidate.deaths == null ? 'Unknown' : formatNumber(candidate.deaths)}</td>
+              <td>
+                <Badge
+                  tone={candidate.validation_status === 'passed_preliminary_checks' ? 'success' : 'warning'}
+                >
+                  {String(candidate.validation_status || 'needs review').replaceAll('_', ' ')}
+                </Badge>
+                <small>
+                  {Array.isArray(candidate.validation_errors)
+                    ? candidate.validation_errors.join(', ')
+                    : candidate.validation_errors || ''}
+                </small>
+              </td>
+              <td>
+                {candidate.source_url ? (
+                  <a
+                    className="source-link"
+                    href={candidate.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open official PDF ↗
+                  </a>
+                ) : 'Unavailable'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+
+  <p className="sk-staging-warning">
+    These are extracted candidates. Displaying them does not approve,
+    reject, or import them into live surveillance.
+  </p>
+</section>
       <section className="metric-grid three-metrics">
-        <MetricCard label="Staged records" value={data?.total_records ?? 0} footnote="Separate from live surveillance" accent="blue" glyph="▤" />
+        <MetricCard label="Staged records" value={data?.total_records || 0} footnote="Separate from live surveillance" accent="blue" glyph="▤" />
         <MetricCard label="Known cases sum" value={totals.known_cases_sum} footnote="Staging sum only; not a national total" accent="teal" glyph="⌁" />
-        <MetricCard label="Unknown case rows" value={totals.unknown_case_rows ?? 0} footnote="Not treated as zero" accent="rose" glyph="?" />
+        <MetricCard label="Unknown case rows" value={totals.unknown_case_rows || 0} footnote="Not treated as zero" accent="rose" glyph="?" />
       </section>
       <section className="panel">
         <div className="panel-heading sk-staging-toolbar">
           <div><span className="eyebrow">REVIEW STATE</span><h3>Rows awaiting or completing review</h3>
-            <p className="muted small">Pending: {formatNumber(data?.status_counts?.pending_supervisor_review ?? 0)} · Promoted: {formatNumber(data?.status_counts?.promoted_to_live_surveillance ?? 0)} · Unknown deaths: {formatNumber(totals.unknown_death_rows ?? 0)}</p>
+              <p className="muted small">Pending: {formatNumber(data?.status_counts?.pending_supervisor_review || 0)} · Promoted: {formatNumber(data?.status_counts?.promoted_to_live_surveillance || 0)} · Ignored: {formatNumber(data?.status_counts?.ignored || 0)}</p>
           </div>
           <div className="sk-staging-actions">
             <label>Status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -667,7 +748,16 @@ function StagedNcdcPreviewPanel() {
         {loading && <div className="loading-line"><span className="spinner" /> Loading staged records…</div>}
         {!loading && !error && rows.length === 0 && <EmptyState title="No staging rows in this view" body="The staging table may be empty or all rows may have a different review status." />}
         {!loading && rows.length > 0 && <div className="sk-staging-table-wrap"><table className="sk-staging-table"><thead><tr><th>Record ID</th><th>State / District</th><th>Disease</th><th>Cases</th><th>Deaths</th><th>Review status</th><th>Source</th></tr></thead>
-          <tbody>{rows.map((row) => <tr key={row.record_id}><td><code>{row.record_id}</code><small>{row.report_year}-W{String(row.report_week).padStart(2, '0')}</small></td><td>{row.state}<small>{row.district}</small></td><td>{row.disease}</td><td>{row.cases == null ? 'Unknown' : formatNumber(row.cases)}</td><td>{row.deaths == null ? 'Unknown' : formatNumber(row.deaths)}</td><td><Badge tone={row.review_status === 'promoted_to_live_surveillance' ? 'success' : 'warning'}>{String(row.review_status || 'unknown').replaceAll('_', ' ')}</Badge></td><td>{row.source_url ? <a className="source-link" href={row.source_url} target="_blank" rel="noreferrer">Open PDF ↗</a> : 'Unavailable'}</td></tr>)}</tbody></table></div>}
+          <tbody>{rows.map((row) => <tr key={row.record_id}><td><code>{row.record_id}</code><small>{row.report_year}-W{String(row.report_week).padStart(2, '0')}</small></td><td>{row.state}<small>{row.district}</small></td><td>{row.disease}</td><td>{row.cases == null ? 'Unknown' : formatNumber(row.cases)}</td><td>{row.deaths == null ? 'Unknown' : formatNumber(row.deaths)}</td><td><Badge tone={row.review_status === 'promoted_to_live_surveillance' ? 'success' : 'warning'}>{String(row.review_status || 'unknown').replaceAll('_', ' ')}</Badge></td><td>
+  {row.is_synthetic ? (
+    <>
+      <Badge tone="warning">SYNTHETIC DATA</Badge>
+      <small>Not an official report</small>
+    </>
+  ) : row.source_url ? (
+    <a className="source-link" href={row.source_url} target="_blank" rel="noreferrer">Open PDF ↗</a>
+  ) : 'Unavailable'}
+</td></tr>)}</tbody></table></div>}
       </section>
       <section className="panel">
         <div className="panel-heading"><div><span className="eyebrow">STATE BREAKDOWN</span><h3>Staging cases by state</h3><p className="muted small">Only known case values are summed; this is not a unique-person count.</p></div></div>
@@ -679,6 +769,8 @@ function StagedNcdcPreviewPanel() {
 }
 
 function Dashboard({ onLogout }) {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [page, setPage] = useState('overview');
   // SK_MULTILINGUAL_UI_V1: persists the user's preferred interface language.
   const [uiLanguage, setUiLanguage] = useState(() => {
@@ -687,13 +779,16 @@ function Dashboard({ onLogout }) {
   const [summary, setSummary] = useState(null);
   const [records, setRecords] = useState([]);
   const [totalRecords, setTotalRecords] = useState(0);
+  const [stateCoverage, setStateCoverage] = useState([]);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageError, setCoverageError] = useState('');
+  const [locationFallback, setLocationFallback] = useState(false);
   const [pageIndex, setPageIndex] = useState(1);
   const [filters, setFilters] = useState({ state: '', district: '', disease: '', year: '' });
   const [appliedFilters, setAppliedFilters] = useState({ state: '', district: '', disease: '', year: '' });
+  const [sourceFilter, setSourceFilter] = useState('official');
   const [anomalies, setAnomalies] = useState([]);
   const [syntheticAnomalyResult, setSyntheticAnomalyResult] = useState(null);
-  const [icaResult, setIcaResult] = useState(null);
-  const [icaComponents, setIcaComponents] = useState(2);
   const [loading, setLoading] = useState(true);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [working, setWorking] = useState(false);
@@ -707,6 +802,44 @@ function Dashboard({ onLogout }) {
   const [indiaReports, setIndiaReports] = useState(null);
   const [indiaReportsLoading, setIndiaReportsLoading] = useState(false);
   const [indiaReportsError, setIndiaReportsError] = useState('');
+  useEffect(() => {
+  let active = true;
+
+  const loadProfile = async () => {
+    try {
+      const profile = await api('/auth/me');
+      console.log('Logged-in profile:', profile);
+
+      if (!active) return;
+
+      setCurrentUser(profile);
+
+      if (profile.role === 'user') {
+        const locationFilters = {
+          state: profile.state || '',
+          district: profile.district || '',
+          disease: '',
+          year: '',
+        };
+
+        setFilters(locationFilters);
+        setAppliedFilters(locationFilters);
+      }
+    } catch (err) {
+      if (active) {
+        setError(`Could not load account profile: ${err.message}`);
+      }
+    } finally {
+      if (active) setProfileLoaded(true);
+    }
+  };
+
+  loadProfile();
+
+  return () => {
+    active = false;
+  };
+}, []);
 
   useEffect(() => {
     try { window.localStorage.setItem('sk-ui-language', uiLanguage); } catch { /* storage may be disabled */ }
@@ -719,24 +852,83 @@ function Dashboard({ onLogout }) {
   }, [appliedFilters]);
 
   const refreshSummary = useCallback(async () => {
-    const result = await api(`/public/surveillance/summary${filterParams.toString() ? `?${filterParams}` : ''}`);
-    setSummary(result);
-  }, [filterParams]);
+  const params = new URLSearchParams(filterParams);
+
+  let result = await api(
+    `/public/surveillance/summary${params.toString() ? `?${params.toString()}` : ''}`
+  );
+
+  const shouldFallback =
+    currentUser?.role === 'user' &&
+    appliedFilters.state === currentUser.state &&
+    appliedFilters.district === currentUser.district &&
+    Boolean(appliedFilters.district) &&
+    Number(result.total_records || 0) === 0;
+
+  if (shouldFallback) {
+    params.delete('district');
+
+    result = await api(`/public/surveillance/summary?${params.toString()}`);
+
+    setLocationFallback(Number(result.total_records || 0) > 0);
+  } else {
+    setLocationFallback(false);
+  }
+
+  setSummary(result);
+}, [filterParams, currentUser, appliedFilters]);
+  const refreshStateCoverage = useCallback(async () => {
+  setCoverageLoading(true);
+  setCoverageError('');
+
+  try {
+    const result = await api('/public/surveillance/synthetic/state-coverage');
+    setStateCoverage(result.coverage || []);
+  } catch (err) {
+    setCoverageError(err.message || 'Could not load national coverage.');
+  } finally {
+    setCoverageLoading(false);
+  }
+}, []);
+useEffect(() => {
+  if (sourceFilter === 'synthetic') {
+    refreshStateCoverage();
+  }
+}, [sourceFilter, refreshStateCoverage]);
 
   const refreshRecords = useCallback(async () => {
     setRecordsLoading(true);
-    try {
-      const params = new URLSearchParams(filterParams);
-      params.set('page', String(pageIndex));
-      params.set('page_size', '30');
-      const result = await api(`/public/surveillance?${params.toString()}`);
-      setRecords(result.items || []);
-      setTotalRecords(Number(result.total || 0));
-    } finally {
-      setRecordsLoading(false);
-    }
-  }, [filterParams, pageIndex]);
 
+
+  try {
+    const params = new URLSearchParams(filterParams);
+    params.set('source', sourceFilter);
+    params.set('source', sourceFilter);
+    params.set('page', String(pageIndex));
+    params.set('page_size', '30');
+    console.log('Historical API URL:', `/public/surveillance?${params.toString()}`);
+
+    let result = await api(`/public/surveillance?${params.toString()}`);
+
+    const shouldFallback =
+      currentUser?.role === 'user' &&
+      appliedFilters.state === currentUser.state &&
+      appliedFilters.district === currentUser.district &&
+      Boolean(appliedFilters.district) &&
+      Number(result.total || 0) === 0;
+
+    if (shouldFallback) {
+      params.delete('district');
+
+      result = await api(`/public/surveillance?${params.toString()}`);
+    }
+
+    setRecords(result.items || []);
+    setTotalRecords(Number(result.total || 0));
+  } finally {
+    setRecordsLoading(false);
+  }
+}, [filterParams, pageIndex, currentUser, appliedFilters]);
   const refreshAnomalies = useCallback(async () => {
     const result = await api('/analytics/anomalies');
     setAnomalies(result.items || []);
@@ -751,6 +943,7 @@ function Dashboard({ onLogout }) {
     } catch (err) {
       setGlobalFeedError(err.message || 'Could not load the WHO public feed.');
     } finally {
+
       setGlobalFeedLoading(false);
     }
   }, []);
@@ -767,16 +960,36 @@ function Dashboard({ onLogout }) {
       setIndiaReportsLoading(false);
     }
   }, []);
+useEffect(() => {
+  if (!profileLoaded || !currentUser) return undefined;
 
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError('');
-    Promise.all([refreshSummary(), refreshRecords(), refreshAnomalies()])
-      .catch((err) => { if (alive) setError(err.message || 'Could not connect to the API.'); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [refreshSummary, refreshRecords, refreshAnomalies]);
+  let alive = true;
+
+  setLoading(true);
+  setError('');
+
+  Promise.all([
+    refreshSummary(),
+    refreshRecords(),
+    refreshAnomalies()
+  ])
+    .catch((err) => {
+      if (alive) setError(err.message || 'Could not connect to the API.');
+    })
+    .finally(() => {
+      if (alive) setLoading(false);
+    });
+
+  return () => {
+    alive = false;
+  };
+}, [
+  profileLoaded,
+  currentUser,
+  refreshSummary,
+  refreshRecords,
+  refreshAnomalies
+]);
 
   useEffect(() => {
     if (page !== 'signals' && page !== 'overview') return undefined;
@@ -791,6 +1004,25 @@ function Dashboard({ onLogout }) {
     const refreshTimer = window.setInterval(() => refreshIndiaReports(), 15 * 60 * 1000);
     return () => window.clearInterval(refreshTimer);
   }, [page, refreshIndiaReports]);
+  useEffect(() => {
+  if (page !== 'overview' || !profileLoaded || !currentUser) {
+    return undefined;
+  }
+
+  // Refresh dataset counts when Overview is opened
+  refreshSummary().catch((err) => {
+    console.error('Could not refresh dataset counts:', err);
+  });
+
+  // Continue refreshing every 60 seconds
+  const refreshTimer = window.setInterval(() => {
+    refreshSummary().catch((err) => {
+      console.error('Could not refresh dataset counts:', err);
+    });
+  }, 60 * 1000);
+
+  return () => window.clearInterval(refreshTimer);
+}, [page, profileLoaded, currentUser, refreshSummary]);
 
   useEffect(() => {
     let stopped = false;
@@ -820,8 +1052,23 @@ function Dashboard({ onLogout }) {
   const applyFilters = (event) => {
     event.preventDefault(); setPageIndex(1); setAppliedFilters({ ...filters });
   };
-  const clearFilters = () => { const empty = { state: '', district: '', disease: '', year: '' }; setFilters(empty); setAppliedFilters(empty); setPageIndex(1); };
+  const clearFilters = () => {
+  const empty = {
+    state: currentUser?.role === 'user' ? (currentUser.state || '') : '',
+    district: currentUser?.role === 'user' ? (currentUser.district || '') : '',
+    disease: '',
+    year: '',
+  };
+  console.log('Reset filters:', {
+  currentUser,
+  empty,
+  appliedFilters,
+});
 
+  setFilters(empty);
+  setAppliedFilters(empty);
+  setPageIndex(1);
+};
   const triggerDemo = async () => {
     setWorking(true); setError('');
     try { const result = await api('/analytics/demo-anomaly', { method: 'POST' }); setNotice(`${result.message} ${result.delivered_clients} live client(s) received it.`); }
@@ -851,13 +1098,6 @@ function Dashboard({ onLogout }) {
     finally { setWorking(false); }
   };
 
-  const loadIca = async () => {
-    setWorking(true); setError(''); setIcaResult(null);
-    try { setIcaResult(await api(`/analytics/ica?components=${icaComponents}`)); }
-    catch (err) { setError(err.message); }
-    finally { setWorking(false); }
-  };
-
   const csvUrl = `${API_BASE}/public/surveillance/export.csv${filterParams.toString() ? `?${filterParams}` : ''}`;
   const downloadCsv = useCallback(async () => {
     try {
@@ -880,20 +1120,194 @@ function Dashboard({ onLogout }) {
       <div className="brand"><div className="brand-mark">SK</div><div><strong>Samraksha Kendra</strong><small>PUBLIC HEALTH INTELLIGENCE</small></div></div>
       <div className="nav-label">WORKSPACE</div>
       <nav>{navItems.map((item) => <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => setPage(item.id)}><span className="nav-glyph">{item.glyph}</span>{translateNav(uiLanguage, item.id, item.label)}{page === item.id && <span className="nav-indicator" />}</button>)}</nav>
-      <div className="sidebar-bottom"><div className={`connection-pill ${wsStatus}`}><span className="status-dot" />{translateText(uiLanguage, wsStatus === 'live' ? 'Live alerts connected' : wsStatus === 'connecting' || wsStatus === 'reconnecting' ? 'Connecting live alerts…' : 'Live alerts offline')}</div><div className="sidebar-note">Aggregate historical data for awareness and research. Not a diagnostic service.</div><div className="footer-brand">SAMRAKSHA KENDRA <span>•</span> REVIEW BUILD</div></div>
+      <div className="sidebar-bottom"><div className={`connection-pill ${wsStatus}`}><span className="status-dot" />{translateText(uiLanguage, wsStatus === 'live' ? 'Live alerts connected' : wsStatus === 'connecting' || wsStatus === 'reconnecting' ? 'Connecting live alerts…' : 'Live alerts offline')}</div><div className="sidebar-note">Aggregate historical data for awareness and research. Not a diagnostic service.</div><div className="footer-brand">SAMRAKSHA KENDRA <span>”¢</span> REVIEW BUILD</div></div>
     </aside>
 
-    <main className="main-content">
-      <header className="topbar"><div><div className="eyebrow">SURVEILLANCE WORKSPACE / {translateNav(uiLanguage, pageMeta.id, pageMeta.label).toUpperCase()}</div><h1>{translateText(uiLanguage, page === 'overview' ? 'Public health overview' : translateNav(uiLanguage, pageMeta.id, pageMeta.label))}</h1><p>{page === 'overview' ? 'Understand available surveillance data and recent signals.' : page === 'history' ? 'Explore public, aggregate historical surveillance records.' : page === 'signals' ? 'View newly published official global outbreak notices.' : page === 'india-reports' ? 'Browse official Indian weekly outbreak reports.' : page === 'staged-data' ? 'Inspect numerical NCDC candidates awaiting supervisor review.' : page === 'anomalies' ? 'Inspect statistical flags and safely test live event delivery.' : page === 'map' ? 'Explore the latest available reporting period by state and review historical anomaly candidates.' : page === 'assistant' ? 'Ask questions using the loaded surveillance data and inspect sources.' : 'Explore statistical independent components from disease-count signals.'}</p></div><div className="topbar-actions"><label className="sk-language-switcher" title="Change interface language"><span>{uiLanguage === 'te' ? 'భాష' : uiLanguage === 'kn' ? 'ಭಾಷೆ' : uiLanguage === 'hi' ? 'भाषा' : 'Language'}</span><select aria-label="Interface language" value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value)}>{UI_LANGUAGES.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}</select></label><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{translateText(uiLanguage, wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM '+wsStatus.toUpperCase())}</Badge><button className="button button-quiet" onClick={() => { setAppliedFilters({ state: '', district: '', disease: '', year: '' }); setFilters({ state: '', district: '', disease: '', year: '' }); setPageIndex(1); }} title={translateText(uiLanguage, "Clear all data filters")}>{translateText(uiLanguage, "Reset filters")}</button><button className="button button-quiet" onClick={onLogout}>Sign out</button></div></header>
 
-      {error && <div className="alert-banner error-banner"><strong>API issue</strong><span>{error}</span><span className="hint">Confirm FastAPI is running and the enhancement router has been included.</span></div>}
-      {notice && <div className="alert-banner info-banner"><strong>Update</strong><span>{notice}</span><button className="close-notice" aria-label="Dismiss notice" onClick={() => setNotice('')}>×</button></div>}
-      {loading && <div className="loading-line"><span className="spinner" /> Loading surveillance data…</div>}
+<main className="main-content">
+  <header className="topbar">
+    <div>
+      <div className="eyebrow">
+        SURVEILLANCE WORKSPACE / {translateNav(uiLanguage, pageMeta.id, pageMeta.label).toUpperCase()}
+      </div>
+      <h1>
+        {translateText(uiLanguage, page === 'overview' ? 'Public health overview' : translateNav(uiLanguage, pageMeta.id, pageMeta.label))}
+      </h1>
+      <p>
+        {page === 'overview'
+          ? 'Understand available surveillance data and recent signals.'
+          : page === 'history'
+          ? 'Explore public, aggregate historical surveillance records.'
+          : page === 'signals'
+          ? 'View newly published official global outbreak notices.'
+          : page === 'india-reports'
+          ? 'Browse official Indian weekly outbreak reports.'
+          : page === 'staged-data'
+          ? 'Inspect numerical NCDC candidates awaiting supervisor review.'
+          : page === 'anomalies'
+          ? 'Inspect statistical flags and safely test live event delivery.'
+          : page === 'map'
+          ? 'Explore the latest available reporting period by state and review historical anomaly candidates.'
+          : page === 'assistant'
+          ? 'Ask questions using the loaded surveillance data and inspect sources.'
+          : 'Explore statistical independent components from disease-count signals.'}
+      </p>
+    </div>
+
+    <div className="topbar-actions">
+      <label className="sk-language-switcher" title="Change interface language">
+        <span>
+          {uiLanguage === 'te' ? 'భాష' : uiLanguage === 'kn' ? 'ಭಾಷೆ' : uiLanguage === 'hi' ? 'भाषा' : 'Language'}
+        </span>
+        <select
+          aria-label="Interface language"
+          value={uiLanguage}
+          onChange={(event) => setUiLanguage(event.target.value)}
+        >
+          {UI_LANGUAGES.map((language) => (
+            <option key={language.code} value={language.code}>
+              {language.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>
+        {translateText(uiLanguage, wsStatus === 'live' ? 'LIVE STREAM ON' : 'STREAM ' + wsStatus.toUpperCase())}
+      </Badge>
+
+      <button
+        className="button button-quiet"
+        onClick={clearFilters}
+        title={translateText(uiLanguage, "Clear all data filters")}
+      >
+        {translateText(uiLanguage, "Reset filters")}
+      </button>
+
+      <button className="button button-quiet" onClick={onLogout}>
+        Sign out
+      </button>
+    </div>
+  </header>
+
+  {error && (
+    <div className="alert-banner error-banner">
+      <strong>API issue</strong>
+      <span>{error}</span>
+      <span className="hint">Confirm FastAPI is running and the enhancement router has been included.</span>
+    </div>
+  )}
+
+  {locationFallback && (
+    <div className="alert-banner info-banner">
+      <strong>Location coverage notice</strong>
+      <span>
+        No district-specific records are currently available for
+        {` ${currentUser?.district}, ${currentUser?.state}`}.
+        Showing available state-level data instead.
+      </span>
+    </div>
+  )}
+
+  {notice && (
+    <div className="alert-banner info-banner">
+      <strong>Update</strong>
+      <span>{notice}</span>
+      <button
+        className="close-notice"
+        aria-label="Dismiss notice"
+        onClick={() => setNotice('')}
+      >
+        ×
+      </button>
+    </div>
+  )}
+
+  {loading && (
+    <div className="loading-line">
+      <span className="spinner" /> Loading surveillance data…
+    </div>
+  )}
 
       {page === 'overview' && <>
         <section className="hero-panel"><div className="hero-copy"><Badge tone="blue">IDSP DATA EXPLORER</Badge><h2>Evidence-led monitoring.<br /><em>Earlier signals.</em></h2><p>A shared workspace to inspect historical reports, investigate possible anomalies and demonstrate real-time alert delivery.</p><div className="hero-actions"><button className="button button-primary" onClick={() => setPage('history')}>Explore historical data <span>→</span></button><button className="button button-outline" onClick={() => setPage('anomalies')}>Open anomaly lab</button></div></div><div className="hero-visual"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="hero-core"><span>SK</span><small>MONITORING</small></div><div className="orbit-tag tag-one"><span className="status-dot" /> DATA</div><div className="orbit-tag tag-two">↗ SIGNALS</div><div className="orbit-tag tag-three">◉ INSIGHTS</div></div></section>
         <div className="section-heading"><div><span className="eyebrow">CURRENT DATASET</span><h2>At a glance</h2></div><span className="muted small">Values reflect records loaded into this installation</span></div>
-        <section className="metric-grid"><MetricCard label="Surveillance records" value={summary?.total_records} footnote="Available aggregate records" accent="blue" glyph="▤"/><MetricCard label="Reported cases" value={summary?.total_cases} footnote="Sum of available case counts" accent="teal" glyph="⌁"/><MetricCard label="Reported deaths" value={summary?.total_deaths} footnote="Sum of available death counts" accent="rose" glyph="＋"/><MetricCard label="States / UTs" value={summary?.states_count} footnote={`${formatNumber(summary?.diseases_count)} distinct disease labels`} accent="violet" glyph="◎"/></section>
+        <section className="metric-grid">
+  <MetricCard
+    label="Surveillance records"
+    value={summary?.total_records}
+    footnote="Official IDSP records"
+    accent="blue"
+    glyph="▤"
+  />
+  <MetricCard
+    label="Reported cases"
+    value={summary?.total_cases}
+    footnote="Sum of available case counts"
+    accent="teal"
+    glyph="⌁"
+  />
+  <MetricCard
+    label="Reported deaths"
+    value={summary?.total_deaths}
+    footnote="Sum of available death counts"
+    accent="rose"
+    glyph="+"
+  />
+  <MetricCard
+    label="States / UTs"
+    value={summary?.states_count}
+    footnote={`${formatNumber(summary?.diseases_count)} distinct disease labels`}
+    accent="violet"
+    glyph="⌖"
+  />
+</section>
+
+<div className="section-heading">
+  <div>
+    <span className="eyebrow">DATASET BREAKDOWN</span>
+    <h2>All available records</h2>
+  </div>
+  <span className="muted small">Live database counts</span>
+</div>
+
+<section className="metric-grid">
+  <MetricCard
+    label="Official IDSP"
+    value={summary?.official_idsp_records}
+    footnote="Official surveillance dataset"
+    accent="blue"
+    glyph="▤"
+  />
+  <MetricCard
+    label="Approved NCDC"
+    value={summary?.approved_ncdc_records}
+    footnote="Reviewed and promoted records"
+    accent="teal"
+    glyph="✓"
+  />
+  <MetricCard
+    label="Synthetic records"
+    value={summary?.synthetic_records}
+    footnote="Simulated demonstration data"
+    accent="violet"
+    glyph="◇"
+  />
+  <MetricCard
+    label="Pending NCDC review"
+    value={summary?.pending_ncdc_records}
+    footnote="Not included in live total"
+    accent="rose"
+    glyph="◷"
+  />
+  <MetricCard
+    label="Total live records"
+    value={summary?.total_live_records}
+    footnote="IDSP + approved NCDC + synthetic"
+    accent="teal"
+    glyph="∑"
+  />
+</section>
         <section className="panel official-live-panel">
           <div className="panel-heading official-live-heading">
             <div><span className="eyebrow">LIVE OFFICIAL SOURCE UPDATES</span><h3>Latest published outbreak intelligence</h3><p className="muted small">Fetched from WHO and the official NCDC/IDSP weekly report catalogue. These publication feeds are separate from the 246 historical structured surveillance rows.</p></div>
@@ -913,7 +1327,7 @@ function Dashboard({ onLogout }) {
               {indiaReports?.items?.length ? <div className="official-live-items">{indiaReports.items.slice(0, 5).map((item) => <article className="official-live-item official-live-report" key={item.url}><div className="official-live-date">{item.year ? `Year ${item.year}` : 'Official report'}{item.week ? ` · Week ${item.week}` : ''}</div><strong>{item.title}</strong><a className="source-link" href={item.url} target="_blank" rel="noreferrer">Open official NCDC report ↗</a></article>)}</div> : <p className="muted small">{indiaReportsLoading ? 'Checking the NCDC archive…' : 'No NCDC reports loaded yet. Use Refresh official sources.'}</p>}
             </section>
           </div>
-          <p className="official-live-note">Refresh interval: every 15 minutes while this overview is open. “Last checked” is the retrieval time; the report’s publication date is shown separately. This is current public-source intelligence, not a continuous patient-level case-count feed. New numerical records are only added after report extraction, validation and import.</p>
+          <p className="official-live-note">Refresh interval: every 15 minutes while this overview is open. “Last checked” is the retrieval time; the report’s publication date is shown separately. This is current public-source intelligence, not a continuous patient-level case-count feed. New numerical records are only added after report extraction, validation and import.</p>
         </section>
         <section className="content-grid main-chart-grid"><article className="panel large-panel"><div className="panel-heading"><div><span className="eyebrow">TIME SERIES</span><h3>Reported cases by reporting week</h3></div><Badge>Historical</Badge></div><TrendChart points={summary?.weekly_trend || []}/></article><article className="panel"><div className="panel-heading"><div><span className="eyebrow">GEOGRAPHY</span><h3>Top reported states</h3></div><span className="panel-icon">⌖</span></div><HorizontalBars items={summary?.top_states || []}/></article></section>
         <section className="content-grid"><article className="panel"><div className="panel-heading"><div><span className="eyebrow">DISEASE BREAKDOWN</span><h3>Most reported diseases</h3></div><button className="text-button" onClick={() => setPage('history')}>View data →</button></div><HorizontalBars items={summary?.top_diseases || []}/></article><article className="panel live-panel"><div className="panel-heading"><div><span className="eyebrow">EVENT STREAM</span><h3>Live alert activity</h3></div><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{wsStatus}</Badge></div>{liveEvents.length ? <div className="event-list">{liveEvents.slice(0, 4).map((event) => <EventRow key={event.event_id || `${event.created_at}-${event.type}`} event={event}/>)}</div> : <EmptyState title="No new live events" body="Keep this page open, then trigger a synthetic demo event from the Anomaly detection page."/>}<button className="button button-outline full-width" onClick={() => setPage('anomalies')}>Test live notification</button></article></section>
@@ -926,9 +1340,129 @@ function Dashboard({ onLogout }) {
           <label>District<input value={filters.district} onChange={(e) => setFilters({ ...filters, district: e.target.value })} placeholder="e.g. Bengaluru" /></label>
           <label>Disease<input value={filters.disease} onChange={(e) => setFilters({ ...filters, disease: e.target.value })} placeholder="e.g. Dengue" /></label>
           <label>Year<input type="number" min="2000" max="2100" value={filters.year} onChange={(e) => setFilters({ ...filters, year: e.target.value })} placeholder="All years" /></label>
+          <label>
+  Data source
+  <select
+    value={sourceFilter}
+    onChange={(e) => {
+      setSourceFilter(e.target.value);
+      setPageIndex(1);
+    }}
+  >
+    <option value="official">Official records</option>
+    <option value="synthetic">Synthetic sample data</option>
+    <option value="all">All records (labelled)</option>
+  </select>
+</label>
           <div className="filter-actions"><button className="button button-primary" type="submit">Apply filters</button><button className="button button-quiet" type="button" onClick={clearFilters}>Clear</button></div>
         </form></section>
-        <section className="panel table-panel"><div className="panel-heading"><div><span className="eyebrow">RESULTS</span><h3>Surveillance records <span className="inline-count">{formatNumber(totalRecords)}</span></h3></div><button className="button button-outline" onClick={downloadCsv}>↓ Export CSV</button></div>{recordsLoading ? <div className="loading-line"><span className="spinner"/> Loading records…</div> : records.length ? <div className="table-scroll"><table><thead><tr><th>Period</th><th>State / district</th><th>Disease</th><th>Cases</th><th>Deaths</th><th>Status</th><th>Source</th></tr></thead><tbody>{records.map((row) => <tr key={row.record_id || `${row.year}-${row.week}-${row.state}-${row.disease}`}><td><strong>{row.year}-W{String(row.week).padStart(2, '0')}</strong><small>{row.reporting_start_date || 'Date unavailable'}</small></td><td>{row.state || '—'}<small>{row.district || 'District not specified'}</small></td><td>{row.disease || '—'}</td><td className="number-cell">{formatNumber(row.cases)}</td><td className="number-cell">{formatNumber(row.deaths)}</td><td><Badge tone={/outbreak|alert/i.test(row.outbreak_status || '') ? 'warning' : 'neutral'}>{row.outbreak_status || 'Reported'}</Badge></td><td>{row.source_url ? <a className="source-link" href={row.source_url} target="_blank" rel="noreferrer">Source ↗</a> : <span className="muted">{row.source || '—'}</span>}</td></tr>)}</tbody></table></div> : <EmptyState title="No records matched" body="Try a broader state, district, disease or year filter."/>}<div className="pagination"><span className="muted small">Showing {records.length ? ((pageIndex-1)*30+1) : 0}–{Math.min(pageIndex*30,totalRecords)} of {formatNumber(totalRecords)}</span><div><button className="button button-quiet" disabled={pageIndex <= 1} onClick={() => setPageIndex((p) => Math.max(1, p-1))}>← Previous</button><span className="page-count">Page {pageIndex} / {pageCount}</span><button className="button button-quiet" disabled={pageIndex >= pageCount} onClick={() => setPageIndex((p) => Math.min(pageCount, p+1))}>Next →</button></div></div></section>
+        {sourceFilter === 'synthetic' && (
+  <section className="panel">
+    <div className="panel-heading">
+      <div>
+        <span className="eyebrow">NATIONAL COVERAGE</span>
+        <h3>Synthetic surveillance coverage</h3>
+        <p className="muted small">
+          Illustrative sample coverage across all Indian States and Union Territories.
+        </p>
+      </div>
+      <Badge tone="warning">SYNTHETIC DATA ONLY</Badge>
+    </div>
+      {coverageLoading ? (
+  <p className="muted">Loading national coverage...</p>
+) : coverageError ? (
+  <p className="error-text">{coverageError}</p>
+) : (
+  <>
+    <div className="metric-grid">
+      <div className="metric-card">
+        <span className="muted small">States & UTs covered</span>
+        <strong>
+          {stateCoverage.filter(item => item.records > 0).length} / 36
+        </strong>
+      </div>
+
+      <div className="metric-card">
+        <span className="muted small">Synthetic records</span>
+        <strong>
+          {formatNumber(stateCoverage.reduce((sum, item) => sum + item.records, 0))}
+        </strong>
+      </div>
+
+      <div className="metric-card">
+        <span className="muted small">Representative districts</span>
+        <strong>110</strong>
+      </div>
+    </div>
+
+    <h4>State-wise synthetic record distribution</h4>
+
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+      gap: '12px',
+      marginTop: '16px'
+    }}>
+      {stateCoverage.map((item) => {
+        const maxRecords = Math.max(
+          ...stateCoverage.map(state => state.records),
+          1
+        );
+
+        return (
+          <div key={item.state}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              marginBottom: '5px'
+            }}>
+              <span>{item.state}</span>
+              <strong>{item.records}</strong>
+            </div>
+
+            <div style={{
+              height: '9px',
+              background: 'var(--border-color, #e5e7eb)',
+              borderRadius: '8px',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                width: `${(item.records / maxRecords) * 100}%`,
+                height: '100%',
+                background: '#269b78',
+                borderRadius: '8px'
+              }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </>
+)}
+
+
+    <p className="data-disclaimer">
+      These are generated sample records, not verified disease reports.
+      District coverage is representative and does not mean every district is included.
+      Synthetic records are kept separate from official surveillance records.
+    </p>
+  </section>
+)}
+
+<section className="panel table-panel"><div className="panel-heading"><div><span className="eyebrow">RESULTS</span><h3>Surveillance records <span className="inline-count">{formatNumber(totalRecords)}</span></h3></div><button className="button button-outline" onClick={downloadCsv}>↓ Export CSV</button></div>{recordsLoading ? <div className="loading-line"><span className="spinner"/> Loading records…</div> : records.length ? <div className="table-scroll"><table><thead><tr><th>Period</th><th>State / district</th><th>Disease</th><th>Cases</th><th>Deaths</th><th>Status</th><th>Source</th></tr></thead><tbody>{records.map((row) => <tr key={row.record_id || `${row.year}-${row.week}-${row.state}-${row.disease}`}><td><strong>{row.year}-W{String(row.week).padStart(2, '0')}</strong><small>{row.reporting_start_date || 'Date unavailable'}</small></td><td>{row.state || '—'}<small>{row.district || 'District not specified'}</small></td><td>{row.disease || '—'}</td><td className="number-cell">{formatNumber(row.cases)}</td><td className="number-cell">{formatNumber(row.deaths)}</td><td><Badge tone={/outbreak|alert/i.test(row.outbreak_status || '') ? 'warning' : 'neutral'}>{row.outbreak_status || 'Reported'}</Badge></td><td>
+  {row.is_synthetic ? (
+    <>
+      <Badge tone="warning">SYNTHETIC DATA</Badge>
+      <small>Not an official report</small>
+    </>
+  ) : row.source_url ? (
+    <a className="source-link" href={row.source_url} target="_blank" rel="noreferrer">
+      Source ↗
+    </a>
+  ) : (
+    <span className="muted">{row.source || '—'}</span>
+  )}
+</td></tr>)}</tbody></table></div> : <EmptyState title="No records matched" body="Try a broader state, district, disease or year filter."/>}<div className="pagination"><span className="muted small">Showing {records.length ? ((pageIndex-1)*30+1) : 0}”“{Math.min(pageIndex*30,totalRecords)} of {formatNumber(totalRecords)}</span><div><button className="button button-quiet" disabled={pageIndex <= 1} onClick={() => setPageIndex((p) => Math.max(1, p-1))}>â† Previous</button><span className="page-count">Page {pageIndex} / {pageCount}</span><button className="button button-quiet" disabled={pageIndex >= pageCount} onClick={() => setPageIndex((p) => Math.min(pageCount, p+1))}>Next →</button></div></div></section>
         <p className="data-disclaimer">CSV export is capped at 10,000 rows per request. This portal is intended for aggregate public-health awareness and research, not diagnosis or clinical decision-making.</p>
       </>}
 
@@ -946,7 +1480,7 @@ function Dashboard({ onLogout }) {
 
 
       {page === 'india-reports' && <>
-        <section className="hero-compact india-reports-hero"><div><Badge tone="blue">OFFICIAL INDIAN SOURCE</Badge><h2>Indian outbreak report archive</h2><p>Browse official NCDC weekly outbreak PDFs compiled through India's Integrated Disease Surveillance Programme (IDSP). This catalogue refreshes periodically and links to official source reports.</p></div><div className="signals-glyph">⌂</div></section>
+        <section className="hero-compact india-reports-hero"><div><Badge tone="blue">OFFICIAL INDIAN SOURCE</Badge><h2>Indian outbreak report archive</h2><p>Browse official NCDC weekly outbreak PDFs compiled through India's Integrated Disease Surveillance Programme (IDSP). This catalogue refreshes periodically and links to official source reports.</p></div><div className="signals-glyph">▧</div></section>
         <section className="panel"><div className="panel-heading"><div><span className="eyebrow">PUBLIC SOURCE FEED</span><h3>NCDC Weekly Outbreak Reports</h3><p className="muted small">Source: <a className="source-link" href="https://ncdc.mohfw.gov.in/includes/WeeklyOutbreaks.php" target="_blank" rel="noreferrer">ncdc.mohfw.gov.in ↗</a></p></div><div className="feed-actions"><Badge tone={indiaReports?.status === 'available' ? 'success' : indiaReports?.status === 'stale' ? 'warning' : 'neutral'}>{indiaReports?.status || (indiaReportsLoading ? 'loading' : 'not loaded')}</Badge><button className="button button-outline" disabled={indiaReportsLoading} onClick={() => refreshIndiaReports(true)}>{indiaReportsLoading ? 'Refreshing…' : 'Refresh archive'}</button></div></div>
           {indiaReportsError && <div className="feed-warning"><strong>Archive unavailable</strong><span>{indiaReportsError} Your existing IDSP historical records remain available.</span></div>}
           {indiaReportsLoading && !indiaReports && <div className="loading-line"><span className="spinner"/> Fetching official NCDC report links…</div>}
@@ -966,24 +1500,13 @@ function Dashboard({ onLogout }) {
         {syntheticAnomalyResult && <section className="panel"><div className="panel-heading"><div><span className="eyebrow">DETECTOR VALIDATION</span><h3>Synthetic anomaly screening check</h3><p className="muted small">Controlled fixture; independent of hosted surveillance records.</p></div><Badge tone={syntheticAnomalyResult.status === 'passed' ? 'success' : 'danger'}>{syntheticAnomalyResult.status.toUpperCase()}</Badge></div><p>{syntheticAnomalyResult.message}</p><div className="feed-metadata"><span>Fixture: {syntheticAnomalyResult.fixture_name}</span><span>Periods: {syntheticAnomalyResult.input_periods}</span><span>Expected flags: {syntheticAnomalyResult.expected_flags}</span><span>Detected: {syntheticAnomalyResult.count}</span></div>{syntheticAnomalyResult.items?.map((item, index) => <div className="anomaly-card" key={`synthetic-${index}`}><div className="anomaly-bullet">!</div><div className="anomaly-body"><div className="anomaly-title-row"><strong>{item.disease}</strong><Badge tone="warning">SYNTHETIC · {item.severity}</Badge></div><p>{item.message}</p><div className="meta-row"><span>{item.state}</span><span>{item.year} · Week {item.week}</span><span>{item.method}</span></div></div><div className="anomaly-values"><strong>{formatNumber(item.cases)}</strong><small>synthetic cases</small><span>Baseline {formatNumber(item.baseline_median)}</span></div></div>)}<p className="feed-warning-text">{syntheticAnomalyResult.caution}</p></section>}
         <section className="panel"><div className="panel-heading"><div><span className="eyebrow">REAL-TIME NOTIFICATIONS</span><h3>Events received by this browser</h3></div><Badge tone={wsStatus === 'live' ? 'success' : 'neutral'}>{wsStatus}</Badge></div>{liveEvents.length ? <div className="event-list">{liveEvents.map((event) => <EventRow key={event.event_id || event.created_at} event={event}/>)}</div> : <EmptyState title="Waiting for an event" body="Keep the WebSocket connected and select Generate synthetic demo event to test the live delivery path."/>}</section>
       </>}
-
-      {page === 'report-queue' && <NCDCReportReviewQueue />}
       {page === 'map' && <IndiaMapHotspots />}
 
       {page === 'staged-data' && <StagedNcdcPreviewPanel />}
 
       {page === 'report-review' && <ReportReviewQueuePanel />}
 
-      {page === 'ica' && <>
-        <section className="hero-compact ica-hero"><div><Badge tone="violet">EXPERIMENTAL RESEARCH MODULE</Badge><h2>Independent Component Analysis</h2><p>FastICA explores statistically independent combinations of weekly disease-count signals. It does not prove causality and is not used to issue official alerts.</p></div><div className="ica-glyph">IC<small>A</small></div></section>
-        <section className="panel ica-controls"><div><h3>Configure the experiment</h3><p className="muted small">The backend selects top disease features, creates year-week samples, standardizes varying columns and runs FastICA.</p></div><div className="ica-form"><label>Number of components<select value={icaComponents} onChange={(e) => setIcaComponents(Number(e.target.value))}><option value={2}>2 components</option><option value={3}>3 components</option><option value={4}>4 components</option><option value={5}>5 components</option></select></label><button className="button button-primary" disabled={working} onClick={loadIca}>{working ? 'Analysing…' : 'Run FastICA'}</button></div></section>
-        {icaResult ? <>
-          <section className="metric-grid three-metrics"><MetricCard label="Reporting periods" value={icaResult.sample_count} footnote="Year-week samples" accent="blue" glyph="◷"/><MetricCard label="Input disease signals" value={icaResult.features?.length} footnote="Varying features selected" accent="teal" glyph="⌁"/><MetricCard label="Independent components" value={icaResult.n_components} footnote="Requested model output" accent="violet" glyph="◉"/></section>
-          <section className="panel"><div className="panel-heading"><div><span className="eyebrow">COMPONENT SIGNALS</span><h3>ICA outputs across reporting weeks</h3></div><Badge tone="violet">FastICA</Badge></div><IcaPlot signals={icaResult.signals}/></section>
-          <section className="panel"><div className="panel-heading"><div><span className="eyebrow">MIXING WEIGHTS</span><h3>Disease contribution weights</h3></div></div><div className="table-scroll"><table><thead><tr><th>Component</th>{(icaResult.features || []).map((f) => <th key={f}>{f}</th>)}</tr></thead><tbody>{(icaResult.loadings || []).map((row) => <tr key={row.component}><td><strong>{row.component}</strong></td>{(icaResult.features || []).map((feature) => <td className="number-cell" key={feature}>{row.disease_weights[feature]}</td>)}</tr>)}</tbody></table></div><p className="method-note">{icaResult.interpretation_note}</p></section>
-        </> : <section className="panel"><EmptyState title="ICA experiment not run" body="Run FastICA to analyse the dataset. If there are too few weekly periods or varying disease signals, the API will explain what additional data is required."/></section>}
-        <section className="notice-panel"><strong>How to explain ICA in the review</strong><p>“We use ICA as an exploratory unsupervised analysis to transform multiple correlated disease-count signals into components that are statistically independent under the model assumptions. The current prototype visualizes these components; we have not established that they correspond to actual disease causes or that ICA independently predicts outbreaks.”</p></section>
-      </>}
+
 
       {page === 'assistant' && <EvidenceAssistant language={uiLanguage} />}
 
@@ -996,36 +1519,92 @@ function Dashboard({ onLogout }) {
 
 /* SK_EVIDENCE_ASSISTANT_V1 */
 function EvidenceAssistant({ language = 'en' }) {
-  const copy = {
-    en: { title: 'Evidence assistant', subtitle: 'Ask questions about the loaded surveillance dataset. Answers are retrieved and calculated from structured records, with source links.', placeholder: 'Type a question, then press Enter or click Ask question…', hint: 'Press Enter to send · Shift+Enter for a new line', ask: 'Ask question', busy: 'Searching records…', intro: 'Choose a suggested question or type a question below.', prompts: ['Summarize the surveillance dataset', 'Which diseases have the highest reported cases?', 'Show weekly trend', 'Show cases in Karnataka'], sources: 'Sources', scope: 'Data coverage', error: 'Could not query the evidence assistant.' },
-    te: { title: 'సాక్ష్యాధారిత సహాయకుడు', subtitle: 'లోడ్ చేసిన నిఘా డేటాసెట్ గురించి అడగండి. సమాధానాలు నిర్మిత రికార్డుల నుండి లెక్కించబడతాయి; మూల లింకులు చూపబడతాయి.', placeholder: 'మీ ప్రశ్న టైప్ చేసి Enter నొక్కండి…', hint: 'పంపడానికి Enter నొక్కండి · కొత్త లైన్ కోసం Shift+Enter', ask: 'ప్రశ్న అడగండి', busy: 'రికార్డులు వెతుకుతోంది…', intro: 'సూచించిన ప్రశ్న ఎంచుకోండి లేదా మీ ప్రశ్న టైప్ చేయండి.', prompts: ['నిఘా డేటాసెట్ సారాంశం', 'అత్యధిక కేసులున్న వ్యాధులు', 'వారాల ధోరణి చూపండి', 'Karnataka కేసులు చూపండి'], sources: 'మూలాలు', scope: 'డేటా పరిధి', error: 'సహాయకుడి ప్రశ్నను ప్రాసెస్ చేయలేకపోయింది.' },
-    kn: { title: 'ಸಾಕ್ಷ್ಯಾಧಾರಿತ ಸಹಾಯಕ', subtitle: 'ಲೋಡ್ ಮಾಡಿದ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾಸೆಟ್ ಕುರಿತು ಪ್ರಶ್ನೆ ಕೇಳಿ. ಉತ್ತರಗಳನ್ನು ರಚನಾತ್ಮಕ ದಾಖಲೆಗಳಿಂದ ಲೆಕ್ಕಿಸಲಾಗುತ್ತದೆ; ಮೂಲ ಲಿಂಕ್‌ಗಳೂ ಇರುತ್ತವೆ.', placeholder: 'ನಿಮ್ಮ ಪ್ರಶ್ನೆ ಟೈಪ್ ಮಾಡಿ Enter ಒತ್ತಿ…', hint: 'ಕಳುಹಿಸಲು Enter · ಹೊಸ ಸಾಲಿಗೆ Shift+Enter', ask: 'ಪ್ರಶ್ನೆ ಕೇಳಿ', busy: 'ದಾಖಲೆಗಳನ್ನು ಹುಡುಕುತ್ತಿದೆ…', intro: 'ಸೂಚಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ.', prompts: ['ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾ ಸಾರಾಂಶ', 'ಹೆಚ್ಚು ವರದಿಯಾದ ರೋಗಗಳು', 'ವಾರದ ಪ್ರವೃತ್ತಿ ತೋರಿಸಿ', 'Karnataka ಪ್ರಕರಣಗಳನ್ನು ತೋರಿಸಿ'], sources: 'ಮೂಲಗಳು', scope: 'ಡೇಟಾ ವ್ಯಾಪ್ತಿ', error: 'ಸಹಾಯಕವನ್ನು ಪ್ರಶ್ನಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.' },
-    hi: { title: 'साक्ष्य-आधारित सहायक', subtitle: 'लोड किए गए निगरानी डेटासेट के बारे में पूछें। उत्तर संरचित रिकॉर्ड से गणना किए जाते हैं और स्रोत लिंक दिखाए जाते हैं।', placeholder: '“total cases in Karnataka” या “top diseases” आज़माएँ…', ask: 'प्रश्न पूछें', busy: 'रिकॉर्ड खोज रहे हैं…', intro: 'सुझाया गया प्रश्न चुनें या अपना प्रश्न लिखें।', prompts: ['निगरानी डेटासेट का सारांश', 'सबसे अधिक रिपोर्ट की गई बीमारियाँ', 'साप्ताहिक रुझान दिखाएँ', 'Karnataka के मामले दिखाएँ'], sources: 'स्रोत', scope: 'डेटा कवरेज', error: 'सहायक से प्रश्न नहीं किया जा सका।' },
+    const copy = {
+    en: {
+      title: 'Evidence assistant',
+      subtitle: 'Ask questions about the loaded surveillance dataset. Answers are calculated from records, with source links.',
+      placeholder: 'Type a question, then press Enter or click Ask question…',
+      hint: 'Press Enter to send · Shift+Enter for a new line',
+      ask: 'Ask question',
+      busy: 'Searching records…',
+      intro: 'Choose a suggested question or type your own below.',
+      prompts: ['Summarize the surveillance dataset', 'Which diseases have the highest reported cases?', 'Show weekly trend', 'Show cases in Karnataka'],
+      sources: 'Sources', scope: 'Data coverage',
+      error: 'Could not query the evidence assistant.'
+    },
+    te: {
+      title: 'ఆధార ఆధారిత సహాయకుడు',
+      subtitle: 'లోడ్ చేసిన వ్యాధి పర్యవేక్షణ డేటా గురించి ప్రశ్నలు అడగండి. సమాధానాలు రికార్డుల ఆధారంగా లెక్కించబడతాయి; మూల లింకులు చూపబడతాయి.',
+      placeholder: 'మీ ప్రశ్న టైప్ చేసి Enter నొక్కండి…',
+      hint: 'పంపడానికి Enter · కొత్త లైన్ కోసం Shift+Enter',
+      ask: 'ప్రశ్న అడగండి',
+      busy: 'రికార్డులను వెతుకుతోంది…',
+      intro: 'సూచించిన ప్రశ్నను ఎంచుకోండి లేదా మీ ప్రశ్న టైప్ చేయండి.',
+      prompts: ['డేటా సారాంశం చూపండి', 'ఎక్కువ కేసులు ఉన్న వ్యాధులు ఏవి?', 'వారాల వారీ ధోరణి చూపండి', 'కర్ణాటక కేసులు చూపండి'],
+      sources: 'మూలాలు', scope: 'డేటా పరిధి',
+      error: 'సహాయకుడిని సంప్రదించలేకపోయాం.'
+    },
+    kn: {
+      title: 'ಆಧಾರಿತ ಸಹಾಯಕ',
+      subtitle: 'ಲೋಡ್ ಮಾಡಿದ ರೋಗ ಮೇಲ್ವಿಚಾರಣಾ ಡೇಟಾದ ಬಗ್ಗೆ ಪ್ರಶ್ನೆಗಳನ್ನು ಕೇಳಿ. ಉತ್ತರಗಳನ್ನು ದಾಖಲೆಗಳಿಂದ ಲೆಕ್ಕಹಾಕಲಾಗುತ್ತದೆ ಮತ್ತು ಮೂಲ ಲಿಂಕ್‌ಗಳನ್ನು ತೋರಿಸಲಾಗುತ್ತದೆ.',
+      placeholder: 'ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ Enter ಒತ್ತಿರಿ…',
+      hint: 'ಕಳುಹಿಸಲು Enter · ಹೊಸ ಸಾಲಿಗೆ Shift+Enter',
+      ask: 'ಪ್ರಶ್ನೆ ಕೇಳಿ',
+      busy: 'ದಾಖಲೆಗಳನ್ನು ಹುಡುಕುತ್ತಿದೆ…',
+      intro: 'ಸೂಚಿಸಿದ ಪ್ರಶ್ನೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ.',
+      prompts: ['ಡೇಟಾದ ಸಾರಾಂಶ ತೋರಿಸಿ', 'ಹೆಚ್ಚು ಪ್ರಕರಣಗಳಿರುವ ರೋಗಗಳು ಯಾವುವು?', 'ವಾರದ ಪ್ರವೃತ್ತಿ ತೋರಿಸಿ', 'ಕರ್ನಾಟಕದ ಪ್ರಕರಣಗಳನ್ನು ತೋರಿಸಿ'],
+      sources: 'ಮೂಲಗಳು', scope: 'ಡೇಟಾ ವ್ಯಾಪ್ತಿ',
+      error: 'ಸಹಾಯಕವನ್ನು ಸಂಪರ್ಕಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.'
+    },
+    hi: {
+      title: 'साक्ष्य-आधारित सहायक',
+      subtitle: 'लोड किए गए रोग निगरानी डेटा के बारे में प्रश्न पूछें। उत्तर रिकॉर्ड के आधार पर निकाले जाते हैं और स्रोत लिंक दिखाए जाते हैं।',
+      placeholder: 'अपना प्रश्न लिखें और Enter दबाएँ…',
+      hint: 'भेजने के लिए Enter · नई पंक्ति के लिए Shift+Enter',
+      ask: 'प्रश्न पूछें',
+      busy: 'रिकॉर्ड खोजे जा रहे हैं…',
+      intro: 'सुझाया गया प्रश्न चुनें या अपना प्रश्न लिखें।',
+      prompts: ['निगरानी डेटा का सारांश दें', 'किन बीमारियों के सबसे अधिक मामले हैं?', 'साप्ताहिक रुझान दिखाएँ', 'कर्नाटक के मामले दिखाएँ'],
+      sources: 'स्रोत', scope: 'डेटा कवरेज',
+      error: 'सहायक से प्रश्न नहीं किया जा सका।'
+    },
   };
+
   const t = copy[language] || copy.en;
   const [question, setQuestion] = useState('');
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
+  const [error, setError] = useState('');
 
-  const ask = async (value) => {
-    const q = String(value ?? question).trim();
-    if (!q || q.length > 400 || pending) return;
-    setQuestion(q); setPending(true); setError('');
-    setHistory((old) => [...old, { role: 'user', text: q }]);
+  const ask = async (prompt) => {
+    const q = (typeof prompt === 'string' ? prompt : question).trim();
+    if (!q || pending) return;
+
+    setQuestion(q);
+    setPending(true);
+    setError('');
+    setHistory(previous => [...previous, { role: 'user', text: q }]);
+
     try {
       const result = await api('/public/assistant/query', {
         method: 'POST',
-        body: JSON.stringify({ question: q, language }),
+        body: JSON.stringify({ question: q, language })
       });
-      setHistory((old) => [...old, { role: 'assistant', text: result.answer, sources: result.sources || [], disclaimer: result.disclaimer, items: result.items || [], note: result.note }]);
+
+      setHistory(previous => [...previous, {
+        role: 'assistant',
+        text: result.answer || 'No answer was returned.',
+        items: result.items || [],
+        sources: result.sources || [],
+        disclaimer: result.disclaimer || ''
+      }]);
       setQuestion('');
     } catch (err) {
-      setError(err?.message || t.error);
-      setHistory((old) => [...old, { role: 'assistant', text: t.error, sources: [], disclaimer: '', items: [] }]);
-    } finally { setPending(false); }
+      setError(err.message || t.error);
+    } finally {
+      setPending(false);
+    }
   };
-
   return <>
     <section className="hero-compact sk-evidence-hero"><div><Badge tone="blue">RETRIEVAL-BASED · SOURCE-LINKED</Badge><h2>{t.title}</h2><p>{t.subtitle}</p></div><div className="hero-compact-icon">✦</div></section>
     <section className="panel sk-evidence-panel">
@@ -1047,7 +1626,18 @@ function EvidenceAssistant({ language = 'en' }) {
           {entry.disclaimer && <small className="sk-evidence-disclaimer">{entry.disclaimer}</small>}
         </article>)}
       </div>
-      <div className="notice-panel sk-evidence-note"><strong>{t.scope}</strong><p>Answers are computed from structured IDSP records loaded in this installation. This module does not use an LLM, diagnose patients, or declare outbreaks. Always inspect linked source material and the coverage note.</p></div>
+
+      <div className="notice-panel sk-evidence-note">
+        <strong>{t.scope}</strong>
+        <p>
+          General questions are answered using Gemini AI. Surveillance statistics
+          are calculated from structured IDSP records loaded in this installation.
+          Synthetic demonstration records are stored and analysed separately and
+          must not be treated as official public-health data. This assistant does
+          not diagnose patients or declare outbreaks. Always inspect linked source
+          material and the coverage note.
+        </p>
+      </div>
     </section>
   </>;
 }
@@ -1059,30 +1649,201 @@ function EventRow({ event }) {
 }
 
 function LoginScreen({ onLogin }) {
+  const [mode, setMode] = useState('user-login');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [state, setState] = useState('');
+  const [district, setDistrict] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
   const submit = async (event) => {
-    event.preventDefault(); setBusy(true); setError('');
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setSuccess('');
+
     try {
-      const result = await api('/auth/login', { method: 'POST', body: JSON.stringify({ username: username.trim(), password }) });
-      onLogin(result.access_token);
-    } catch (err) { setError(err.message || 'Sign in failed.'); }
-    finally { setBusy(false); }
+      if (mode === 'register') {
+        await api('/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            full_name: fullName.trim(),
+            email: email.trim(),
+            password,
+            state: state.trim(),
+            district: district.trim(),
+          }),
+        });
+
+        setSuccess('Registration successful. Please sign in.');
+        setMode('user-login');
+        setPassword('');
+      } else if (mode === 'admin-login') {
+        const result = await api('/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: username.trim(),
+            password,
+          }),
+        });
+        onLogin(result.access_token);
+      } else {
+        const result = await api('/auth/user/login', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: email.trim(),
+            password,
+          }),
+        });
+        onLogin(result.access_token);
+      }
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
   };
-  return <main className="auth-screen"><form className="auth-card" onSubmit={submit}>
-    <div className="auth-brand-mark">SK</div>
-    <p className="auth-eyebrow">PUBLIC HEALTH INTELLIGENCE</p>
-    <h1>Samraksha Kendra</h1>
-    <p className="auth-subtitle">Sign in to access the surveillance workspace.</p>
-    <label className="auth-label">Username<input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required maxLength={100} /></label>
-    <label className="auth-label">Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required maxLength={256} /></label>
-    {error && <div className="auth-error" role="alert">{error}</div>}
-    <button className="auth-submit" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Secure sign in'}</button>
-    <p className="auth-footnote">Access is configured by the project administrator. There is no public self-registration.</p>
-  </form></main>;
+
+  return (
+    <main className="auth-screen">
+      <form className="auth-card" onSubmit={submit}>
+        <div className="auth-brand-mark">SK</div>
+        <p className="auth-eyebrow">PUBLIC HEALTH INTELLIGENCE</p>
+        <h1>Samraksha Kendra</h1>
+
+        <p className="auth-subtitle">
+          {mode === 'register'
+            ? 'Create your account to access local public health information.'
+            : 'Sign in to access your surveillance workspace.'}
+        </p>
+
+        {mode !== 'admin-login' && (
+          <div className="auth-mode-switch">
+            <button type="button" onClick={() => {
+              setMode('user-login');
+              setError('');
+              setSuccess('');
+            }}>
+              User sign in
+            </button>
+            <button type="button" onClick={() => {
+              setMode('register');
+              setError('');
+              setSuccess('');
+            }}>
+              Register
+            </button>
+          </div>
+        )}
+
+        {mode === 'admin-login' && (
+          <p className="auth-footnote">Administrator sign in</p>
+        )}
+
+        {mode === 'register' && (
+          <>
+            <label className="auth-label">
+              Full name
+              <input value={fullName} onChange={e => setFullName(e.target.value)}
+                required maxLength={150} autoComplete="name" />
+            </label>
+
+            <label className="auth-label">
+              Email
+              <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+                required maxLength={255} autoComplete="email" />
+            </label>
+
+            <label className="auth-label">
+              Password
+              <input type="password" value={password}
+                onChange={e => setPassword(e.target.value)}
+                required minLength={8} maxLength={128}
+                autoComplete="new-password" />
+            </label>
+
+            <label className="auth-label">
+              State
+              <input value={state} onChange={e => setState(e.target.value)}
+                required maxLength={100} placeholder="e.g. Telangana" />
+            </label>
+
+            <label className="auth-label">
+              District
+              <input value={district} onChange={e => setDistrict(e.target.value)}
+                required maxLength={100} placeholder="e.g. Hyderabad" />
+            </label>
+          </>
+        )}
+
+        {mode === 'user-login' && (
+          <>
+            <label className="auth-label">
+              Email
+              <input type="email" value={email}
+                onChange={e => setEmail(e.target.value)}
+                required autoComplete="email" />
+            </label>
+
+            <label className="auth-label">
+              Password
+              <input type="password" value={password}
+                onChange={e => setPassword(e.target.value)}
+                required maxLength={128} autoComplete="current-password" />
+            </label>
+          </>
+        )}
+
+        {mode === 'admin-login' && (
+          <>
+            <label className="auth-label">
+              Username
+              <input value={username} onChange={e => setUsername(e.target.value)}
+                required autoComplete="username" />
+            </label>
+
+            <label className="auth-label">
+              Password
+              <input type="password" value={password}
+                onChange={e => setPassword(e.target.value)}
+                required maxLength={256} autoComplete="current-password" />
+            </label>
+          </>
+        )}
+
+        {error && <div className="auth-error" role="alert">{error}</div>}
+        {success && <div className="auth-success" role="status">{success}</div>}
+
+        <button className="auth-submit" type="submit" disabled={busy}>
+          {busy ? 'Please wait...' :
+            mode === 'register' ? 'Create account' :
+            mode === 'admin-login' ? 'Administrator sign in' : 'Secure sign in'}
+        </button>
+
+        {mode === 'user-login' && (
+          <p className="auth-footnote">
+            New here? Create an account to get started.
+          </p>
+        )}
+
+        <button type="button" className="auth-admin-link"
+          onClick={() => {
+            setMode(mode === 'admin-login' ? 'user-login' : 'admin-login');
+            setError('');
+            setSuccess('');
+            setPassword('');
+          }}>
+          {mode === 'admin-login' ? 'Back to user sign in' : 'Administrator access'}
+        </button>
+      </form>
+    </main>
+  );
 }
+
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(() => Boolean(sessionStorage.getItem('sk_access_token')));
@@ -1095,4 +1856,3 @@ export default function App() {
   const handleLogout = () => { sessionStorage.removeItem('sk_access_token'); setAuthenticated(false); };
   return authenticated ? <Dashboard onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />;
 }
-

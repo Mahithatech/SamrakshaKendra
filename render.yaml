@@ -10,6 +10,8 @@
         value: 3.13.5
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_DIRECT_URL
+        sync: false
       - key: SK_ADMIN_USERNAME
         sync: false
       - key: SK_ADMIN_PASSWORD_HASH

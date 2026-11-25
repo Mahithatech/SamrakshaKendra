@@ -209,3 +209,34 @@ class IDSPSurveillance(Base):
     source_url: Mapped[str | None] = mapped_column(
         Text
     )
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True
+    )
+
+    full_name: Mapped[str] = mapped_column(
+        String(150), nullable=False
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(255), unique=True, index=True, nullable=False
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String(512), nullable=False
+    )
+
+    state: Mapped[str] = mapped_column(
+        String(100), nullable=False
+    )
+
+    district: Mapped[str] = mapped_column(
+        String(100), nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
