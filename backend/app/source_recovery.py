@@ -4,6 +4,7 @@ from urllib.error import HTTPError
 
 logger = logging.getLogger(__name__)
 _scan_cursor = ""
+_scan_priority = False
 
 from .ingestion_pipeline import (
     _download_official_pdf, _fetch_ncdc_catalogue,
@@ -153,22 +154,33 @@ def scan_pending_recovery(catalogue, limit=2):
     from sqlalchemy import text
     from .ingestion_pipeline import engine
 
-    global _scan_cursor
+    global _scan_cursor, _scan_priority
     if not catalogue:
+        return {"checked": 0, "repaired": 0, "errors": 0}
+    # Retired catalogue URLs are more likely to be broken. The composite
+    # cursor still visits current URLs, and resets only after a full pass.
+    catalogue_urls = sorted({str(item.get("url") or item.get("source_url") or "").strip()
+                             for item in catalogue} - {""})
+    if not catalogue_urls:
         return {"checked": 0, "repaired": 0, "errors": 0}
     with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT * FROM public.sk_ingestion_candidates
             WHERE review_status='pending_supervisor_review'
-              AND candidate_id > :cursor
-            ORDER BY candidate_id LIMIT :limit
-        """), {"cursor": _scan_cursor, "limit": max(1, min(int(limit), 2))}).mappings().all()
+              AND (source_url = ANY(CAST(:catalogue_urls AS text[])), candidate_id)
+                  > (:priority, :cursor)
+            ORDER BY (source_url = ANY(CAST(:catalogue_urls AS text[]))), candidate_id
+            LIMIT :limit
+        """), {"cursor": _scan_cursor, "priority": _scan_priority,
+               "catalogue_urls": catalogue_urls, "limit": max(1, min(int(limit), 2))}).mappings().all()
     if not rows:
         _scan_cursor = ""
+        _scan_priority = False
         return {"checked": 0, "repaired": 0, "errors": 0}
     summary = {"checked": 0, "repaired": 0, "errors": 0}
     for row in rows:
         _scan_cursor = row["candidate_id"]
+        _scan_priority = row["source_url"] in catalogue_urls
         summary["checked"] += 1
         try:
             summary["repaired"] += int(recover_pending_candidate(dict(row), catalogue))

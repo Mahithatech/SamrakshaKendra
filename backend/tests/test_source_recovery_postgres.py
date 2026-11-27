@@ -95,5 +95,33 @@ class SourceRecoveryPostgresTests(unittest.TestCase):
         self.assertEqual(doc["extraction_status"],"pending_download")
         self.assertEqual(audit["details"]["old_source_url"],old_url)
 
+    def test_scan_prioritizes_retired_source_and_continues(self):
+        from sqlalchemy import text
+        from app import source_recovery as recovery
+        p = self.pipeline
+        retired = self.candidate()
+        current = self.candidate()
+        retired["candidate_id"] = "zz-" + retired["candidate_id"]
+        current["candidate_id"] = "aa-" + current["candidate_id"]
+        self.assertEqual(p._insert_candidates([retired,current]), (2,2))
+        with p.engine.connect() as conn:
+            urls = conn.execute(text("""
+                SELECT DISTINCT source_url FROM public.sk_ingestion_candidates
+                WHERE source_url != :retired
+            """), {"retired": retired["source_url"]}).scalars().all()
+        catalogue = [{"url": url} for url in urls]
+        with patch.object(recovery,"_scan_cursor",""), \
+             patch.object(recovery,"_scan_priority",False), \
+             patch.object(recovery,"recover_pending_candidate",return_value=False) as attempt:
+            summary = recovery.scan_pending_recovery(catalogue)
+            self.assertEqual(summary, {"checked":2,"repaired":0,"errors":0})
+            self.assertEqual(attempt.call_args_list[0].args[0]["candidate_id"],retired["candidate_id"])
+            self.assertNotEqual(attempt.call_args_list[1].args[0]["candidate_id"],retired["candidate_id"])
+            self.assertTrue(recovery._scan_priority)
+            attempt.reset_mock()
+            recovery.scan_pending_recovery(catalogue)
+            self.assertTrue(all(call.args[0]["candidate_id"] != retired["candidate_id"]
+                                for call in attempt.call_args_list))
+
 if __name__ == "__main__":
     unittest.main()
