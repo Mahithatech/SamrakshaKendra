@@ -586,13 +586,14 @@ function StagedNcdcPreviewPanel() {
   }, [statusFilter]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  const [candidateStatus, setCandidateStatus] = useState('pending_supervisor_review');
   const loadPipelineCandidates = useCallback(async () => {
   setPipelineLoading(true);
   setPipelineError('');
 
   try {
     const result = await api(
-      '/admin/pipeline/candidates?review_status=pending_supervisor_review&limit=200'
+      `/admin/pipeline/candidates?review_status=${candidateStatus}&limit=200`
     );
     setPipelineCandidates(result.items || []);
   } catch (err) {
@@ -600,7 +601,7 @@ function StagedNcdcPreviewPanel() {
   } finally {
     setPipelineLoading(false);
   }
-}, []);
+}, [candidateStatus]);
 
 useEffect(() => {
   loadPipelineCandidates();
@@ -612,7 +613,7 @@ useEffect(() => {
     <div className="sk-staging-page">
       <section className="hero-compact sk-staging-hero">
         <div><Badge tone="blue">SEPARATE REVIEW DATASET</Badge><h2>NCDC staging data preview</h2>
-          <p>Inspect extracted weekly report rows before approval. This page is read-only and never promotes data into live surveillance.</p></div>
+          <p>Verify extracted weekly report rows before approval. Approved candidates require a separate explicit import into live surveillance.</p></div>
         <div className="sk-staging-mark" aria-hidden="true">QA</div>
       </section>
       {error && <div className="alert-banner error-banner"><strong>Staging preview issue</strong><span>{error}</span></div>}
@@ -643,7 +644,16 @@ useEffect(() => {
   )}
 
   <p className="muted small">
-    Pending candidates: {formatNumber(pipelineCandidates.length)}
+    <label>Candidate status: {' '}
+      <select value={candidateStatus}
+        onChange={e => setCandidateStatus(e.target.value)}>
+        <option value="pending_supervisor_review">Pending review</option>
+        <option value="approved">Approved</option>
+        <option value="promoted">Promoted</option>
+        <option value="rejected">Rejected</option>
+      </select>
+    </label>
+    {' '}Displayed candidates: {formatNumber(pipelineCandidates.length)}
     {pipelineCandidates.length === 200 ? ' (display limit reached)' : ''}
   </p>
 
@@ -655,7 +665,7 @@ useEffect(() => {
 
   {!pipelineLoading && !pipelineError && pipelineCandidates.length === 0 && (
     <EmptyState
-      title="No pending extracted candidates"
+      title="No candidates in this status"
       body="Refresh after the ingestion pipeline processes additional reports."
     />
   )}
@@ -672,6 +682,7 @@ useEffect(() => {
             <th>Deaths</th>
             <th>Validation</th>
             <th>Source PDF</th>
+            <th>Review actions</th>
           </tr>
         </thead>
         <tbody>
@@ -713,6 +724,13 @@ useEffect(() => {
                     Open official PDF ↗
                   </a>
                 ) : 'Unavailable'}
+              </td>
+              <td>
+                <CandidateReviewActions
+                  key={`${candidate.candidate_id}:${candidate.updated_at}`}
+                  candidate={candidate}
+                  onRefresh={loadPipelineCandidates}
+                />
               </td>
             </tr>
           ))}
@@ -764,6 +782,237 @@ useEffect(() => {
         {states.length ? <div className="sk-staging-state-grid">{states.slice(0, 12).map((row) => <div className="sk-staging-state" key={row.state}><strong>{row.state || 'Unknown state'}</strong><span>{row.known_cases_sum == null ? 'Cases unknown' : `${formatNumber(row.known_cases_sum)} known cases`}</span><small>{formatNumber(row.records)} rows · {formatNumber(row.unknown_case_rows)} missing case counts</small></div>)}</div> : <EmptyState title="No state aggregates" body="State breakdowns appear when staging rows are available." />}
       </section>
       <p className="sk-staging-warning">{data?.data_note || 'Staging data is separate from live surveillance and requires human review.'}</p>
+    </div>
+  );
+}
+
+
+function CandidateReviewActions({ candidate, onRefresh }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [duplicates, setDuplicates] = useState(null);
+  const [note, setNote] = useState('');
+  const [verified, setVerified] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [audit, setAudit] = useState(null);
+  const [draft, setDraft] = useState({});
+  const base = `/admin/pipeline/candidates/${encodeURIComponent(candidate.candidate_id)}`;
+  const pending = candidate.review_status === 'pending_supervisor_review';
+  const approved = candidate.review_status === 'approved';
+
+  async function run(action) {
+    if (busy) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await action();
+    } catch (err) {
+      setMessage(err.message || 'Request failed. Refresh before retrying.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkDuplicates() {
+    await run(async () => {
+      const result = await api(`${base}/duplicates`);
+      setDuplicates(result);
+      setMessage(result.duplicate_count
+        ? 'Potential duplicates found. Import is blocked.'
+        : 'No matching records found.');
+    });
+  }
+
+  async function decide(action) {
+    if (note.trim().length < 8) {
+      setMessage('Enter a review note of at least 8 characters.');
+      return;
+    }
+    if (action === 'approve' && (!verified || duplicates?.duplicate_count !== 0)) {
+      setMessage('Verify the official PDF and check duplicates first.');
+      return;
+    }
+    if (!window.confirm(`Confirm ${action} for this candidate?`)) return;
+    await run(async () => {
+      await api(`${base}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({
+          action,
+          reviewer_note: note.trim()
+        })
+      });
+      await onRefresh();
+    });
+  }
+
+  async function promote() {
+    if (!verified) {
+      setMessage('Confirm the official PDF has been verified.');
+      return;
+    }
+    await run(async () => {
+      const result = await api(`${base}/duplicates`);
+      setDuplicates(result);
+      if (result.duplicate_count !== 0) {
+        setMessage('Import blocked: potential duplicates found.');
+        return;
+      }
+      if (!window.confirm(
+        `Import ${candidate.disease}, ${candidate.state}, ${candidate.cases} cases into live surveillance?`
+      )) return;
+      const result2 = await api(`${base}/promote`, {
+        method: 'POST',
+        body: JSON.stringify({ duplicate_override: false })
+      });
+      if (!['promoted', 'already_promoted'].includes(result2.status)) {
+        throw new Error('Unexpected promotion result. Refresh before retrying.');
+      }
+      await onRefresh();
+      window.alert('Record imported. Open Overview and refresh to view updated totals.');
+    });
+  }
+
+  function startCorrection() {
+    const fields = [
+      'report_year', 'report_week', 'state', 'district',
+      'disease', 'reporting_start_date', 'reporting_end_date',
+      'cases', 'deaths'
+    ];
+    setDraft(Object.fromEntries(fields.map(key => [key, candidate[key] ?? ''])));
+    setEditing(true);
+  }
+
+  async function saveCorrection() {
+    if (note.trim().length < 8) {
+      setMessage('Enter a correction note of at least 8 characters.');
+      return;
+    }
+    const numeric = ['report_year', 'report_week', 'cases'];
+    if (numeric.some(key => String(draft[key]).trim() === '' ||
+      !Number.isInteger(Number(draft[key])))) {
+      setMessage('Enter valid whole numbers for year, week and cases.');
+      return;
+    }
+    if (draft.deaths !== '' && !Number.isInteger(Number(draft.deaths))) {
+      setMessage('Enter a valid death count or leave it unknown.');
+      return;
+    }
+    if (!draft.reporting_start_date || !draft.reporting_end_date) {
+      setMessage('Enter verified reporting dates.');
+      return;
+    }
+    await run(async () => {
+      await api(`${base}/correct`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...draft,
+          report_year: Number(draft.report_year),
+          report_week: Number(draft.report_week),
+          cases: Number(draft.cases),
+          deaths: draft.deaths === '' ? null : Number(draft.deaths),
+          correction_note: note.trim()
+        })
+      });
+      setEditing(false);
+      setVerified(false);
+      setDuplicates(null);
+      setMessage('Correction saved. Verify and approve separately.');
+      await onRefresh();
+    });
+  }
+
+  return (
+    <div style={{ minWidth: 220, display: 'grid', gap: 8 }}>
+      <Badge tone={approved || candidate.review_status === 'promoted' ? 'success' : 'neutral'}>
+        {String(candidate.review_status).replaceAll('_', ' ')}
+      </Badge>
+
+      {(pending || approved) && <>
+        <small>
+          Reporting dates: {candidate.reporting_start_date || 'Unknown'} to {candidate.reporting_end_date || 'Unknown'}
+        </small>
+        <label>
+          <input type="checkbox" checked={verified} disabled={busy}
+            onChange={e => setVerified(e.target.checked)} />
+          {' '}I verified all fields against the official PDF.
+        </label>
+        <button className="button button-outline" disabled={busy}
+          onClick={checkDuplicates}>Check duplicates</button>
+      </>}
+
+      {pending && <>
+        <textarea rows={2} maxLength={1500} value={note}
+          disabled={busy}
+          onChange={e => setNote(e.target.value)}
+          placeholder="Source page and verification notes" />
+
+        <button className="button button-outline" disabled={busy}
+          onClick={startCorrection}>Correct record</button>
+
+        <button className="button button-primary"
+          disabled={busy || editing || !verified ||
+            duplicates?.duplicate_count !== 0 ||
+            candidate.validation_status !== 'passed_preliminary_checks' ||
+            note.trim().length < 8}
+          onClick={() => decide('approve')}>Approve</button>
+
+        <button className="button button-outline"
+          disabled={busy || editing || note.trim().length < 8}
+          onClick={() => decide('reject')}>Reject</button>
+      </>}
+
+      {editing && pending && <>
+        {Object.keys(draft).map(key => (
+          <label key={key}>
+            {key.replaceAll('_', ' ')}
+            <input
+              type={key.includes('_date') ? 'date' :
+                ['report_year','report_week','cases','deaths'].includes(key) ? 'number' : 'text'}
+              value={draft[key]} disabled={busy}
+              style={{ width: '100%' }}
+              onChange={e => setDraft(old => ({ ...old, [key]: e.target.value }))}
+            />
+          </label>
+        ))}
+        <button className="button button-primary" disabled={busy}
+          onClick={saveCorrection}>Save correction</button>
+        <button className="button button-outline" disabled={busy}
+          onClick={() => setEditing(false)}>Cancel correction</button>
+      </>}
+
+      {approved && <button className="button button-primary"
+        disabled={busy || !verified}
+        onClick={promote}>Import to dashboard</button>}
+
+      {candidate.promoted_record_id &&
+        <small>Live record: {candidate.promoted_record_id}</small>}
+
+      <button className="button button-outline" disabled={busy}
+        onClick={() => run(async () => {
+          const result = await api(`/admin/pipeline/audit?candidate_id=${encodeURIComponent(candidate.candidate_id)}`);
+          setAudit(result.items || []);
+        })}>Audit history</button>
+
+      {duplicates && <details open>
+        <summary>Duplicate matches: {duplicates.duplicate_count}</summary>
+        {[...(duplicates.exact_matches || []), ...(duplicates.possible_matches || [])].map((match, i) =>
+          <small key={i} style={{ display: 'block' }}>
+            {match.match_type}: {match.table} - {match.reference}
+            {' '}({match.cases ?? 'Unknown'} cases)
+          </small>
+        )}
+      </details>}
+
+      {audit && <details open>
+        <summary>Review history ({audit.length})</summary>
+        {audit.map((item, i) => <small key={item.audit_id || i}
+          style={{ display: 'block' }}>
+          {item.action} - {item.actor}: {item.note}
+        </small>)}
+      </details>}
+
+      {busy && <small>Processing...</small>}
+      {message && <small role="status">{message}</small>}
     </div>
   );
 }
