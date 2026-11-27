@@ -12,14 +12,15 @@
     "bundle:android": "expo export --platform android"
   },
   "dependencies": {
-    "expo": "~57.0.0",
+    "expo": "~57.0.34",
     "expo-file-system": "~57.0.7",
     "expo-secure-store": "~57.0.4",
-    "expo-sharing": "~57.0.23",
+    "expo-sharing": "~57.0.27",
     "react": "19.2.3",
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-svg": "15.15.4"
+    "react-native-svg": "15.15.4",
+    "react-native-webview": "13.16.1"
   },
   "devDependencies": {
     "@expo/ngrok": "^4.1.0"

@@ -14,7 +14,10 @@
       "bundleIdentifier": "com.samrakshakendra.mobile"
     },
     "extra": {
-      "apiBaseUrl": "https://samraksha-kendra-api.onrender.com"
+      "apiBaseUrl": "https://samraksha-kendra-api.onrender.com",
+      "eas": {
+        "projectId": "4f4fe1f9-e87b-4abc-8652-34918bfab8c6"
+      }
     },
     "plugins": [
       "expo-secure-store",
