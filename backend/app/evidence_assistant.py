@@ -7,6 +7,7 @@ returns source links and a coverage disclaimer.
 from __future__ import annotations
 
 import re
+import logging
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -82,6 +83,18 @@ def is_farewell(question: str) -> bool:
 
 def classify_intent(question: str) -> str:
     q = normalize_question(question)
+
+    # Educational questions should not trigger dataset summaries.
+    educational = re.match(
+        r"^(what is|what are|define|explain|meaning of)\b", q
+    )
+    statistical = re.search(
+        r"\b(total|count|cases|deaths|records|dataset|reported|highest|lowest|weekly|trend|statistics|numbers|how many)\b",
+        q
+    )
+    if educational and not statistical:
+        return "general"
+
     comparison_terms = (
     "compare", "comparison", "difference", "differences", "diff",
     "versus", " vs ", "vs.",
@@ -296,7 +309,12 @@ def ask_evidence_assistant(payload: AssistantQuestion, db: Session = Depends(get
                 question=question,
                 language=language,
             )
-        except Exception:
+        except Exception as exc:
+            logging.getLogger("uvicorn.error").error(
+                "Evidence Assistant failed: type=%s status=%s",
+                type(exc).__name__,
+                getattr(exc, "code", "unknown")
+            )
             raise HTTPException(
                 status_code=503,
                 detail="The AI assistant is temporarily unavailable. Please try again shortly.",

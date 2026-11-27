@@ -10,7 +10,7 @@ from app.config import GEMINI_API_KEY, GEMINI_MODEL
 
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 class EmptyGeminiResponse(RuntimeError):
