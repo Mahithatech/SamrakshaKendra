@@ -332,6 +332,7 @@ def parse_candidate_pdf(content: bytes, source_url: str, title: str = "", source
         identity = "|".join(str(candidate.get(k) if candidate.get(k) is not None else "") for k in (
             "source_url", "source_sha256", "source_page", "source_record_id",
             "state", "district", "disease", "cases", "deaths",
+            "reporting_start_date", "reporting_end_date",
         ))
         candidate["candidate_id"] = hashlib.sha256(identity.casefold().encode()).hexdigest()
         return candidate
@@ -693,8 +694,6 @@ def _update_document_extraction(url: str, fields: dict[str, Any]) -> None:
 
 def _same_ncdc_candidate_version(old: dict, new: dict) -> bool:
     """Recognize replayed PDFs or identical outbreak fields across source URLs."""
-    if old.get("source_sha256") and old["source_sha256"] == new.get("source_sha256"):
-        return True
     fields = ("report_year", "report_week", "state", "district", "disease",
               "cases", "deaths", "reporting_start_date", "reporting_end_date")
     def normalized(value):
@@ -724,7 +723,9 @@ def _insert_candidates(candidates: list[dict[str, Any]]) -> tuple[int, int]:
                            state, district, disease, cases, deaths,
                            reporting_start_date, reporting_end_date
                     FROM public.sk_ingestion_candidates
-                    WHERE UPPER(TRIM(source_record_id)) = :record_id
+                    WHERE COALESCE(NULLIF(UPPER(TRIM(source_record_id)), ''),
+                        UPPER(substring(raw_excerpt from '^[[:space:]]*([A-Za-z]{2}/[A-Za-z]{2,4}/[0-9]{4}/[0-9]+/[0-9]+)'))
+                    ) = :record_id
                 """), {"record_id": record_id}).mappings().all()
                 if any(_same_ncdc_candidate_version(old, c) for old in existing):
                     logger.info("Existing NCDC outbreak version retained: %s", record_id)
@@ -769,8 +770,11 @@ def _extract_pending_pdfs(limit: int) -> tuple[int, int, int, int, list[str]]:
             with engine.begin() as conn:
                 duplicate = conn.execute(text("""
                     SELECT source_url FROM public.sk_source_documents
-                    WHERE content_sha256=:sha AND source_url<>:url LIMIT 1
-                """), {"sha":sha,"url":url}).first()
+                    WHERE content_sha256=:sha AND source_url<>:url
+                      AND extraction_status='extracted'
+                      AND validation_status='candidate_rows_staged'
+                      AND report_year=:year AND report_week=:week LIMIT 1
+                """), {"sha":sha,"url":url,"year":doc.get("report_year"),"week":doc.get("report_week")}).first()
             if duplicate:
                 _update_document_extraction(url, {"source_sha256":sha,"content_sha256":sha,
                     "byte_size":len(content),"extraction_status":"duplicate_content",
