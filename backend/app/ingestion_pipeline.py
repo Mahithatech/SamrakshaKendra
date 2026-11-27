@@ -691,36 +691,49 @@ def _update_document_extraction(url: str, fields: dict[str, Any]) -> None:
             conn.execute(text(f"UPDATE public.sk_source_documents SET {assignments} WHERE source_url=:url"), {**payload,"url":url})
 
 
+def _same_ncdc_candidate_version(old: dict, new: dict) -> bool:
+    """Recognize replayed PDFs or identical outbreak fields across source URLs."""
+    if old.get("source_sha256") and old["source_sha256"] == new.get("source_sha256"):
+        return True
+    fields = ("report_year", "report_week", "state", "district", "disease",
+              "cases", "deaths", "reporting_start_date", "reporting_end_date")
+    def normalized(value):
+        return None if value is None else str(value).strip().casefold()
+    return all(normalized(old.get(field)) == normalized(new.get(field)) for field in fields)
+
+
 def _insert_candidates(candidates: list[dict[str, Any]]) -> tuple[int, int]:
     inserted = invalid_inserted = 0
     if not candidates:
         return 0, 0
     with engine.begin() as conn:
+        # Acquire all identity locks in one deterministic order. A later
+        # report with revised fields is retained, never applied to live data.
+        record_ids = sorted({str(c.get("source_record_id") or "").strip().upper()
+                             for c in candidates} - {""})
+        for record_id in record_ids:
+            conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:record_key))"),
+                         {"record_key": "ncdc:" + record_id})
         for c in candidates:
             record_id = str(c.get("source_record_id") or "").strip().upper()
-
+            errors = list(c.get("validation_errors") or [])
+            revision = False
             if record_id:
-                conn.execute(text("""
-                    SELECT pg_advisory_xact_lock(
-                        hashtext(:record_key)
-                    )
-                """), {"record_key": "ncdc:" + record_id})
-
                 existing = conn.execute(text("""
-                    SELECT candidate_id
+                    SELECT candidate_id, source_sha256, report_year, report_week,
+                           state, district, disease, cases, deaths,
+                           reporting_start_date, reporting_end_date
                     FROM public.sk_ingestion_candidates
                     WHERE UPPER(TRIM(source_record_id)) = :record_id
-                    LIMIT 1
-                """), {"record_id": record_id}).first()
-
-                if existing:
-                    logger.info(
-                        "Existing NCDC outbreak retained: %s",
-                        record_id
-                    )
+                """), {"record_id": record_id}).mappings().all()
+                if any(_same_ncdc_candidate_version(old, c) for old in existing):
+                    logger.info("Existing NCDC outbreak version retained: %s", record_id)
                     continue
+                if existing:
+                    revision = True
+                    errors = sorted(set(errors + ["revised_ncdc_report_requires_supervisor_review"]))
+                    logger.info("Staging revised NCDC outbreak for review: %s", record_id)
 
-            errors = c.get("validation_errors") or []
             result = conn.execute(text("""
                 INSERT INTO public.sk_ingestion_candidates
                 (candidate_id,source_url,source_sha256,report_year,report_week,state,district,disease,
@@ -734,7 +747,7 @@ def _insert_candidates(candidates: list[dict[str, Any]]) -> tuple[int, int]:
                    "report_year":c.get("report_year"),"report_week":c.get("report_week"),"state":c.get("state"),
                    "district":c.get("district"),"disease":c.get("disease"),"start_date":c.get("reporting_start_date"),
                    "end_date":c.get("reporting_end_date"),"cases":c.get("cases"),"deaths":c.get("deaths"),
-                   "excerpt":c["raw_excerpt"],"status":c["validation_status"],"errors":_json_param(errors),
+                   "excerpt":c["raw_excerpt"],"status":"needs_review" if revision else c["validation_status"],"errors":_json_param(errors),
                    "source_page":c.get("source_page"),"source_record_id":c.get("source_record_id")})
             if result.rowcount == 1:
                 inserted += 1
