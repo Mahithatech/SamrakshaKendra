@@ -1,9 +1,20 @@
 
+import logging
+import time
+
+import httpx
 from google import genai
 from google.genai import types
 
 from app.config import GEMINI_API_KEY, GEMINI_MODEL
 
+
+
+logger = logging.getLogger(__name__)
+
+
+class EmptyGeminiResponse(RuntimeError):
+    pass
 
 
 SYSTEM_INSTRUCTION = """
@@ -38,7 +49,6 @@ def generate_gemini_answer(
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured.")
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
 
     prompt = f"""
 User question:
@@ -52,19 +62,48 @@ Response language: {language}
 Answer the user's question. Do not invent facts or statistics.
 """
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.4,
-            max_output_tokens=1000,
-        ),
-    )
+    # Bound the total number of attempts; do not retry invalid credentials or requests.
+    for attempt in range(1, 3):
+        client = None
+        try:
+            client = genai.Client(
+                api_key=GEMINI_API_KEY,
+                http_options=types.HttpOptions(
+                    timeout=15000,
+                    retry_options=types.HttpRetryOptions(attempts=1),
+                ),
+            )
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.4,
+                    max_output_tokens=1000,
+                ),
+            )
 
-    answer = (response.text or "").strip()
+            answer = (response.text or "").strip()
 
-    if not answer:
-        raise RuntimeError("Gemini returned an empty response.")
+            if not answer:
+                raise EmptyGeminiResponse("Gemini returned an empty response.")
 
-    return answer
+            return answer
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            retryable = code in (408, 429, 500, 502, 503, 504) or isinstance(
+                exc, (httpx.TransportError, TimeoutError, EmptyGeminiResponse)
+            )
+            logger.warning(
+                "Gemini request failed: type=%s status=%s attempt=%s retryable=%s",
+                type(exc).__name__, code if isinstance(code, int) else "unknown", attempt, retryable,
+            )
+            if not retryable or attempt == 2:
+                raise
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    logger.warning("Gemini client cleanup failed")
+        time.sleep(1.0)
