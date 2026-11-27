@@ -103,7 +103,7 @@ def _extract_ncdc_record_id(raw_excerpt: str | None) -> str | None:
         return None
 
     match = re.match(
-        r"^\s*([A-Za-z]{2,3}/[A-Za-z]{2,3}/\d{4}/\d{1,2}/\d+)\b",
+        r"^\s*([A-Za-z]{2}/[A-Za-z]{2,4}/\d{4}/\d{1,2}/\d+)\b",
         str(raw_excerpt),
     )
     return match.group(1).upper() if match else None
@@ -116,7 +116,7 @@ def _find_candidate_duplicates(connection, candidate: dict) -> list[dict]:
     Original NCDC record ID equality is the strongest identity match.
     Matching core outbreak fields without the same ID is only a possible match.
     """
-    source_id = _extract_ncdc_record_id(candidate.get("raw_excerpt"))
+    source_id = str(candidate.get("source_record_id") or "").strip().upper() or _extract_ncdc_record_id(candidate.get("raw_excerpt"))
 
     common = {
         "year": candidate["report_year"],
@@ -135,10 +135,11 @@ def _find_candidate_duplicates(connection, candidate: dict) -> list[dict]:
             SELECT record_id, year, week, state, district, disease,
                    cases, deaths, reporting_start_date, reporting_end_date
             FROM public.idsp_surveillance
-            WHERE year=:year AND week=:week
+            WHERE (year=:year AND week=:week
               AND LOWER(TRIM(state))=:state
               AND LOWER(TRIM(district))=:district
-              AND LOWER(TRIM(disease))=:disease
+              AND LOWER(TRIM(disease))=:disease)
+              OR UPPER(TRIM(record_id))=:source_id
             """,
         ),
         (
@@ -149,24 +150,32 @@ def _find_candidate_duplicates(connection, candidate: dict) -> list[dict]:
                    outbreak_start_date AS reporting_start_date,
                    reporting_date AS reporting_end_date
             FROM public.ncdc_outbreak_staging
-            WHERE report_year=:year AND report_week=:week
+            WHERE (report_year=:year AND report_week=:week
               AND LOWER(TRIM(state))=:state
               AND LOWER(TRIM(district))=:district
-              AND LOWER(TRIM(disease))=:disease
+              AND LOWER(TRIM(disease))=:disease)
+              OR UPPER(TRIM(record_id))=:source_id
             """,
         ),
         (
             "other_candidates",
             """
-            SELECT candidate_id, raw_excerpt, report_year AS year,
+            SELECT candidate_id, raw_excerpt, source_record_id, review_status,
+                   promoted_record_id, report_year AS year,
                    report_week AS week, state, district, disease,
                    cases, deaths, reporting_start_date, reporting_end_date
             FROM public.sk_ingestion_candidates
-            WHERE report_year=:year AND report_week=:week
-              AND LOWER(TRIM(state))=:state
-              AND LOWER(TRIM(district))=:district
-              AND LOWER(TRIM(disease))=:disease
-              AND candidate_id<>:candidate_id
+            WHERE candidate_id<>:candidate_id
+              AND (review_status<>'rejected' OR promoted_record_id IS NOT NULL)
+              AND (
+                (report_year=:year AND report_week=:week
+                 AND LOWER(TRIM(state))=:state
+                 AND LOWER(TRIM(district))=:district
+                 AND LOWER(TRIM(disease))=:disease)
+                OR (COALESCE(NULLIF(UPPER(TRIM(source_record_id)), ''),
+                    UPPER(substring(raw_excerpt from '^[[:space:]]*([A-Za-z]{2}/[A-Za-z]{2,4}/[0-9]{4}/[0-9]+/[0-9]+)'))
+                )=:source_id)
+              )
             """,
         ),
     ]
@@ -174,6 +183,7 @@ def _find_candidate_duplicates(connection, candidate: dict) -> list[dict]:
     params = {
         **common,
         "candidate_id": candidate["candidate_id"],
+        "source_id": source_id,
     }
 
     for table_name, sql in queries:
@@ -183,7 +193,7 @@ def _find_candidate_duplicates(connection, candidate: dict) -> list[dict]:
             row = dict(row)
 
             if table_name == "other_candidates":
-                matched_id = _extract_ncdc_record_id(row.get("raw_excerpt"))
+                matched_id = str(row.get("source_record_id") or "").strip().upper() or _extract_ncdc_record_id(row.get("raw_excerpt"))
                 reference = row.get("candidate_id")
             else:
                 matched_id = str(row.get("record_id") or "").strip().upper()
@@ -534,8 +544,16 @@ async def promote_candidate(
             {"key": lock_key},
         )
 
+        # Serialize same original outbreak IDs even when revised fields differ.
+        original_id = str(row.get("source_record_id") or "").strip().upper() or _extract_ncdc_record_id(row.get("raw_excerpt"))
+        if original_id:
+            connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                               {"key": "ncdc:" + original_id})
+
         # Recheck all three tables inside the promotion transaction.
         duplicates = _find_candidate_duplicates(connection, row)
+        if any(match["match_type"] == "exact_match" for match in duplicates):
+            raise HTTPException(409, "Same NCDC outbreak identity already exists. Keep revisions staged; duplicate promotion is prohibited.")
 
         if duplicates:
             reason = str(promotion.override_reason or "").strip()
