@@ -1,0 +1,64 @@
+name: Source recovery tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/app/source_recovery.py'
+      - 'backend/app/ingestion_pipeline.py'
+      - 'backend/tests/test_source_recovery.py'
+      - 'backend/tests/test_source_recovery_postgres.py'
+      - 'backend/app/pipeline_routes.py'
+      - '.github/workflows/source-recovery-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile changed modules
+        run: python -m py_compile backend/app/source_recovery.py backend/app/ingestion_pipeline.py
+      - name: Run isolated recovery tests
+        run: python -m unittest discover -s backend/tests -p test_source_recovery.py -v
+
+  recovery-postgres-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: sk_ci_test
+          POSTGRES_DB: sk_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sk_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONPATH: backend
+      DATABASE_URL: postgresql+psycopg://postgres:sk_ci_test@localhost:5432/sk_ci
+      DATABASE_DIRECT_URL: postgresql+psycopg://postgres:sk_ci_test@localhost:5432/sk_ci
+      SK_TEST_POSTGRES: '1'
+      SK_AUTO_INGESTION_ENABLED: 'false'
+      SK_SYNTHETIC_GENERATION_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r backend/requirements.txt
+      - name: Test isolated PostgreSQL transactions
+        run: python -m unittest discover -s backend/tests -p test_source_recovery_postgres.py -v

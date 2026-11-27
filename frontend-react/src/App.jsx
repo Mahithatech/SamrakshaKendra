@@ -796,6 +796,8 @@ function CandidateReviewActions({ candidate, onRefresh }) {
   const [editing, setEditing] = useState(false);
   const [audit, setAudit] = useState(null);
   const [draft, setDraft] = useState({});
+  const [repairUrl, setRepairUrl] = useState('');
+  const [repairing, setRepairing] = useState(false);
   const base = `/admin/pipeline/candidates/${encodeURIComponent(candidate.candidate_id)}`;
   const pending = candidate.review_status === 'pending_supervisor_review';
   const approved = candidate.review_status === 'approved';
@@ -869,6 +871,28 @@ function CandidateReviewActions({ candidate, onRefresh }) {
       }
       await onRefresh();
       window.alert('Record imported. Open Overview and refresh to view updated totals.');
+    });
+  }
+
+  async function repairSource() {
+    if (!repairUrl.trim() || note.trim().length < 8) {
+      setMessage('Enter the replacement PDF URL and a review note of at least 8 characters.');
+      return;
+    }
+    await run(async () => {
+      const result = await api(`${base}/repair-source`, {
+        method: 'POST',
+        body: JSON.stringify({source_url: repairUrl.trim(), reviewer_note: note.trim()})
+      });
+      if (!['source_repaired', 'already_repaired'].includes(result.status)) {
+        throw new Error('Unexpected repair result. Refresh before retrying.');
+      }
+      setVerified(false);
+      setDuplicates(null);
+      setRepairing(false);
+      setRepairUrl('');
+      setMessage('Source verified and repaired. Review the new PDF before approval.');
+      await onRefresh();
     });
   }
 
@@ -949,8 +973,22 @@ function CandidateReviewActions({ candidate, onRefresh }) {
         <button className="button button-outline" disabled={busy}
           onClick={startCorrection}>Correct record</button>
 
+        <button className="button button-outline" disabled={busy || editing}
+          onClick={() => setRepairing(old => !old)}>Repair source link</button>
+        {repairing && <>
+          <label>Official replacement PDF URL
+            <input type="url" value={repairUrl} disabled={busy}
+              style={{ width: '100%' }}
+              onChange={e => setRepairUrl(e.target.value)}
+              placeholder="https://ncdc.mohfw.gov.in/..." />
+          </label>
+          <button className="button button-primary"
+            disabled={busy || !repairUrl.trim() || note.trim().length < 8}
+            onClick={repairSource}>Verify and repair</button>
+        </>}
+
         <button className="button button-primary"
-          disabled={busy || editing || !verified ||
+          disabled={busy || editing || repairing || !verified ||
             duplicates?.duplicate_count !== 0 ||
             candidate.validation_status !== 'passed_preliminary_checks' ||
             note.trim().length < 8}
