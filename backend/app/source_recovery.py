@@ -48,9 +48,9 @@ def record_verified_source(conn, url, sha, byte_size, year, week):
         INSERT INTO public.sk_source_documents
             (source_url, source_code, title, report_year, report_week,
              source_sha256, content_sha256, byte_size, extraction_status,
-             validation_status, last_success_at)
+             validation_status)
         VALUES (:url,'NCDC',:title,:year,:week,:sha,:sha,:size,
-                'pending_download','awaiting_pdf_extraction',NOW())
+                'pending_download','awaiting_pdf_extraction')
         ON CONFLICT (source_url) DO UPDATE SET
             source_sha256=EXCLUDED.source_sha256,
             content_sha256=EXCLUDED.content_sha256,
@@ -63,7 +63,22 @@ def record_verified_source(conn, url, sha, byte_size, year, week):
                 ELSE sk_source_documents.validation_status END,
             last_attempt_at=CASE WHEN sk_source_documents.content_sha256
                 IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
-                ELSE sk_source_documents.last_attempt_at END
+                ELSE sk_source_documents.last_attempt_at END,
+            page_count=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
+                ELSE sk_source_documents.page_count END,
+            extracted_characters=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
+                ELSE sk_source_documents.extracted_characters END,
+            text_excerpt=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
+                ELSE sk_source_documents.text_excerpt END,
+            last_success_at=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
+                ELSE sk_source_documents.last_success_at END,
+            last_error=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
+                ELSE sk_source_documents.last_error END
     """), {"url":url,"sha":sha,"size":byte_size,"year":year,"week":week,
            "title":f"NCDC weekly outbreak report {year}, week {week}"})
 
