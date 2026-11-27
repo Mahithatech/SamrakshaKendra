@@ -93,7 +93,10 @@ class RecoveryTests(unittest.TestCase):
     def test_exact_repair_and_audit(self):
         self.setup_download()
         self.assertTrue(self.mod.recover_pending_candidate(self.row))
-        update, audit = self.conn.execute.call_args_list
+        update, catalogue, audit = self.conn.execute.call_args_list
+        self.assertIn("INSERT INTO public.sk_source_documents", catalogue.args[0])
+        self.assertEqual(catalogue.args[1]["url"], NEW)
+        self.assertEqual(catalogue.args[1]["size"], len(b"%PDF-test"))
         self.assertIn("UPDATE public.sk_ingestion_candidates", update.args[0])
         self.assertIn("review_status='pending_supervisor_review'", update.args[0])
         self.assertEqual(update.args[1]["page"], 12)
