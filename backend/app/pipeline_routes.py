@@ -770,6 +770,10 @@ async def repair_candidate_source(
             parse_candidate_pdf, content, url, "", sha
         )
     except Exception:
+        import logging
+        logging.getLogger("uvicorn.error").exception(
+            "NCDC replacement PDF download or extraction failed"
+        )
         raise HTTPException(422, "Replacement PDF download or extraction failed")
 
     matches = [
