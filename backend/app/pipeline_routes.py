@@ -701,3 +701,176 @@ def pipeline_events(limit: int = Query(default=50, ge=1, le=200), pending_only: 
           FROM public.sk_pipeline_events {where} ORDER BY created_at DESC LIMIT :limit
         """), {"limit": limit}).mappings().all()
     return {"items": [dict(r) for r in rows], "count": len(rows)}
+
+
+class CandidateSourceRepair(BaseModel):
+    source_url: str
+    reviewer_note: str = Field(min_length=8, max_length=1500)
+
+
+@router.post("/admin/pipeline/candidates/{candidate_id}/repair-source")
+async def repair_candidate_source(
+    candidate_id: str,
+    repair: CandidateSourceRepair,
+    authorization: str | None = Header(default=None),
+):
+    from .ingestion_pipeline import (
+        _download_official_pdf,
+        parse_candidate_pdf,
+        parse_report_period,
+    )
+    import hashlib
+
+    reviewer = _reviewer_from_header(authorization)
+    ensure_pipeline_schema()
+
+    url = repair.source_url.strip()
+
+    if not is_allowed_source_url(url, "NCDC"):
+        raise HTTPException(422, "Invalid official NCDC source URL")
+
+    with engine.connect() as connection:
+        row = connection.execute(text("""
+            SELECT *
+            FROM public.sk_ingestion_candidates
+            WHERE candidate_id = :id
+        """), {"id": candidate_id}).mappings().first()
+
+    if not row:
+        raise HTTPException(404, "Candidate not found")
+
+    row = dict(row)
+
+    if row["review_status"] != "pending_supervisor_review":
+        raise HTTPException(409, "Only pending candidates can be repaired")
+
+    record_id = row.get("source_record_id")
+
+    if not record_id:
+        match = re.search(
+            r"[A-Z]{2}/[A-Z]{2,4}/[0-9]{4}/[0-9]+/[0-9]+",
+            row.get("raw_excerpt") or "",
+        )
+        record_id = match.group(0) if match else None
+
+    if not record_id:
+        raise HTTPException(422, "Original outbreak identity unavailable")
+
+
+    year, week = parse_report_period(url)
+
+    if (year, week) != (row["report_year"], row["report_week"]):
+        raise HTTPException(422, "Replacement report period does not match")
+
+    try:
+        content = await asyncio.to_thread(_download_official_pdf, url)
+        sha = hashlib.sha256(content).hexdigest()
+
+        candidates = await asyncio.to_thread(
+            parse_candidate_pdf, content, url, "", sha
+        )
+    except Exception:
+        raise HTTPException(422, "Replacement PDF download or extraction failed")
+
+    matches = [
+        c for c in candidates
+        if str(c.get("source_record_id") or "").strip().upper()
+        == str(record_id).strip().upper()
+    ]
+
+    if len(matches) != 1:
+        raise HTTPException(422, "Replacement outbreak identity is not unique")
+
+    candidate = matches[0]
+
+    fields = (
+        "state", "district", "disease", "cases", "deaths",
+        "reporting_start_date", "reporting_end_date",
+    )
+
+    def normalized(value):
+        return str(value).strip().casefold()
+
+    mismatches = [
+        field for field in fields
+        if normalized(row.get(field)) != normalized(candidate.get(field))
+    ]
+
+    if mismatches:
+        raise HTTPException(422, "Replacement outbreak fields do not match")
+
+    page = candidate.get("source_page")
+
+    if not page:
+        raise HTTPException(422, "Replacement source page unavailable")
+
+    with engine.begin() as connection:
+        current = connection.execute(text("""
+            SELECT *
+            FROM public.sk_ingestion_candidates
+            WHERE candidate_id = :id
+            FOR UPDATE
+        """), {"id": candidate_id}).mappings().first()
+
+        if not current:
+            raise HTTPException(404, "Candidate not found")
+
+        if (
+            current["review_status"] != "pending_supervisor_review"
+            or current["updated_at"] != row["updated_at"]
+            or current["source_url"] != row["source_url"]
+            or current["source_sha256"] != row["source_sha256"]
+        ):
+            raise HTTPException(409, "Candidate changed during verification")
+
+        if current["source_url"] == url and current["source_sha256"] == sha:
+            return {
+                "status": "already_repaired",
+                "candidate_id": candidate_id,
+            }
+
+        connection.execute(text("""
+            UPDATE public.sk_ingestion_candidates
+            SET source_url = :url,
+                source_sha256 = :sha,
+                source_page = :page,
+                source_record_id = :record_id,
+                updated_at = NOW()
+            WHERE candidate_id = :id
+        """), {
+            "url": url,
+            "sha": sha,
+            "page": page,
+            "record_id": record_id,
+            "id": candidate_id,
+        })
+
+        _insert_audit(
+            connection,
+            candidate_id,
+            "source_repaired",
+            reviewer,
+            repair.reviewer_note,
+            {
+                "old_source_url": row["source_url"],
+                "old_source_sha256": row["source_sha256"],
+                "old_source_page": row.get("source_page"),
+                "old_source_record_id": row.get("source_record_id"),
+                "new_source_url": url,
+                "new_source_sha256": sha,
+                "new_source_page": page,
+                "source_record_id": record_id,
+                "verified_fields": list(fields),
+            },
+        )
+
+    return {
+        "status": "source_repaired",
+        "candidate_id": candidate_id,
+        "source_url": url,
+        "source_sha256": sha,
+        "source_page": page,
+        "verified_fields": len(fields),
+        "review_status": "pending_supervisor_review",
+        "live_records_added": 0,
+    }
