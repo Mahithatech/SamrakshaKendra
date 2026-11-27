@@ -217,11 +217,14 @@ async def run_pipeline_scheduled(x_pipeline_token: str | None = Header(default=N
     india_today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     period_start = india_today - timedelta(days=india_today.weekday())
 
-    synthetic_result = await asyncio.to_thread(
-        generate_synthetic_records,
-        records_per_cycle=48,
-        period_start=period_start,
-    )
+    from .ingestion_pipeline import SYNTHETIC_GENERATION_ENABLED
+    synthetic_result = {"status": "disabled"}
+    if SYNTHETIC_GENERATION_ENABLED:
+        synthetic_result = await asyncio.to_thread(
+            generate_synthetic_records,
+            records_per_cycle=48,
+            period_start=period_start,
+        )
 
     result = await asyncio.to_thread(run_pipeline_cycle)
     result["synthetic_generation"] = synthetic_result
@@ -299,7 +302,7 @@ def pipeline_candidates(
             SELECT candidate_id, source_url, source_sha256, report_year, report_week,
                    state, district, disease, reporting_start_date, reporting_end_date, cases, deaths, raw_excerpt, validation_status,
                    validation_errors, review_status, reviewed_by, reviewed_at, reviewer_note,
-                   promoted_record_id, created_at, updated_at
+                   promoted_record_id, created_at, updated_at, source_page, source_record_id
             FROM public.sk_ingestion_candidates {where}
             ORDER BY report_year DESC, report_week DESC, created_at DESC
             LIMIT :limit
@@ -412,6 +415,7 @@ def correct_candidate(candidate_id: str, correction: CandidateCorrection, author
             "state": correction.state.strip(), "district": correction.district.strip(), "disease": correction.disease.strip(),
             "reporting_start_date": correction.reporting_start_date, "reporting_end_date": correction.reporting_end_date,
             "cases": correction.cases, "deaths": correction.deaths,
+            "source_page": row.get("source_page"),
         }
         from .ingestion_pipeline import validate_candidate
         errors = validate_candidate(candidate)
@@ -719,6 +723,7 @@ async def repair_candidate_source(
         parse_candidate_pdf,
         parse_report_period,
     )
+    from .source_recovery import record_verified_source
     import hashlib
 
     reviewer = _reviewer_from_header(authorization)
@@ -849,6 +854,7 @@ async def repair_candidate_source(
             "id": candidate_id,
         })
 
+        record_verified_source(connection, url, sha, len(content), year, week)
         _insert_audit(
             connection,
             candidate_id,
