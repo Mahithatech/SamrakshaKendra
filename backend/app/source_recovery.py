@@ -37,6 +37,37 @@ def discover_replacements(source_url, year, week, catalogue=None):
     return sorted(urls)
 
 
+def record_verified_source(conn, url, sha, byte_size, year, week):
+    """Register verified bytes without claiming full-document extraction.
+
+    Preserve the old catalogue row and its historical fingerprint. A newly
+    discovered or changed PDF remains eligible for ordinary extraction.
+    """
+    from sqlalchemy import text
+    conn.execute(text("""
+        INSERT INTO public.sk_source_documents
+            (source_url, source_code, title, report_year, report_week,
+             source_sha256, content_sha256, byte_size, extraction_status,
+             validation_status, last_success_at)
+        VALUES (:url,'NCDC',:title,:year,:week,:sha,:sha,:size,
+                'pending_download','awaiting_pdf_extraction',NOW())
+        ON CONFLICT (source_url) DO UPDATE SET
+            source_sha256=EXCLUDED.source_sha256,
+            content_sha256=EXCLUDED.content_sha256,
+            byte_size=EXCLUDED.byte_size,
+            extraction_status=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN 'pending_download'
+                ELSE sk_source_documents.extraction_status END,
+            validation_status=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN 'awaiting_pdf_extraction'
+                ELSE sk_source_documents.validation_status END,
+            last_attempt_at=CASE WHEN sk_source_documents.content_sha256
+                IS DISTINCT FROM EXCLUDED.content_sha256 THEN NULL
+                ELSE sk_source_documents.last_attempt_at END
+    """), {"url":url,"sha":sha,"size":byte_size,"year":year,"week":week,
+           "title":f"NCDC weekly outbreak report {year}, week {week}"})
+
+
 def recover_pending_candidate(row, catalogue=None):
     """Repair a pending candidate only after exact source verification."""
     import re
@@ -67,10 +98,10 @@ def recover_pending_candidate(row, catalogue=None):
         if len(matches) == 1 and matches[0].get("source_page") and all(
             normalize(row.get(f)) == normalize(matches[0].get(f)) for f in fields
         ):
-            verified.append((url, sha, matches[0]["source_page"]))
+            verified.append((url, sha, matches[0]["source_page"], len(content)))
     if len(verified) != 1:
         return False
-    url, sha, page = verified[0]
+    url, sha, page, byte_size = verified[0]
     with engine.begin() as conn:
         result = conn.execute(text("""
             UPDATE public.sk_ingestion_candidates
@@ -83,6 +114,7 @@ def recover_pending_candidate(row, catalogue=None):
                "old_url":row["source_url"],"old_sha":row["source_sha256"]})
         if result.rowcount != 1:
             return False
+        record_verified_source(conn, url, sha, byte_size, row["report_year"], row["report_week"])
         details = {"old_source_url":row["source_url"],"old_source_sha256":row["source_sha256"],
                    "old_source_page":row.get("source_page"),"old_source_record_id":row.get("source_record_id"),
                    "new_source_url":url,"new_source_sha256":sha,"new_source_page":page,
