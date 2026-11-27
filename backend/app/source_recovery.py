@@ -1,5 +1,9 @@
 """Conservative discovery of replacements for unavailable NCDC PDFs."""
+import logging
 from urllib.error import HTTPError
+
+logger = logging.getLogger(__name__)
+_scan_cursor = ""
 
 from .ingestion_pipeline import (
     _download_official_pdf, _fetch_ncdc_catalogue,
@@ -7,17 +11,22 @@ from .ingestion_pipeline import (
 )
 
 
-def discover_replacements(source_url, year, week):
-    """Return official same-period alternatives only after a confirmed 404/410.
-
-    Discovery alone never changes database records. The existing repair
-    endpoint must verify the outbreak identity and all seven fields.
-    """
+def discover_replacements(source_url, year, week, catalogue=None):
+    """Return official same-period alternatives only after a confirmed 404/410."""
     if not is_allowed_source_url(source_url, "NCDC"):
         return []
     if not isinstance(year, int) or not isinstance(week, int):
         return []
     if not 2000 <= year <= 2100 or not 1 <= week <= 53:
+        return []
+    urls = set()
+    for item in (_fetch_ncdc_catalogue() if catalogue is None else catalogue):
+        url = str(item.get("url") or item.get("source_url") or "").strip()
+        if url != source_url and is_allowed_source_url(url, "NCDC"):
+            if parse_report_period(url) == (year, week):
+                urls.add(url)
+    # Do not select a subset when several possible replacements exist.
+    if not urls or len(urls) > 3:
         return []
     try:
         _download_official_pdf(source_url)
@@ -25,16 +34,10 @@ def discover_replacements(source_url, year, week):
     except HTTPError as exc:
         if exc.code not in (404, 410):
             return []
-    urls = set()
-    for item in _fetch_ncdc_catalogue():
-        url = str(item.get("url") or item.get("source_url") or "").strip()
-        if url != source_url and is_allowed_source_url(url, "NCDC"):
-            if parse_report_period(url) == (year, week):
-                urls.add(url)
     return sorted(urls)
 
 
-def recover_pending_candidate(row):
+def recover_pending_candidate(row, catalogue=None):
     """Repair a pending candidate only after exact source verification."""
     import re
     import uuid
@@ -48,13 +51,15 @@ def recover_pending_candidate(row):
     if not record_id:
         match = re.search(r"[A-Z]{2}/[A-Z]{2,4}/[0-9]{4}/[0-9]+/[0-9]+", row.get("raw_excerpt") or "")
         record_id = match.group(0) if match else None
-    if not record_id:
+    if not record_id or not re.fullmatch(r"[A-Z]{2}/[A-Z]{2,4}/[0-9]{4}/[0-9]+/[0-9]+", str(record_id).strip().upper()):
         return False
     fields = ("state", "district", "disease", "cases", "deaths",
               "reporting_start_date", "reporting_end_date")
+    if any(row.get(f) is None or not str(row[f]).strip() for f in fields):
+        return False
     normalize = lambda value: str(value).strip().casefold()
     verified = []
-    for url in discover_replacements(row["source_url"], row["report_year"], row["report_week"])[:3]:
+    for url in discover_replacements(row["source_url"], row["report_year"], row["report_week"], catalogue):
         content = _download_official_pdf(url)
         sha = content_fingerprint(content)
         matches = [c for c in parse_candidate_pdf(content, url, "", sha)
@@ -89,3 +94,38 @@ def recover_pending_candidate(row):
                     'Confirmed unavailable source; exact official replacement verified.',CAST(:details AS JSONB))
         """), {"audit":str(uuid.uuid4()),"id":row["candidate_id"],"details":json.dumps(details)})
     return True
+
+
+def scan_pending_recovery(catalogue, limit=2):
+    """Bound work per ingestion cycle and rotate through pending candidates.
+
+    No live surveillance rows are changed. The existing ingestion advisory
+    lock serializes scheduled cycles; compare-and-set protects manual reviews.
+    Cursor is process-local and starts again after a restart.
+    """
+    from sqlalchemy import text
+    from .ingestion_pipeline import engine
+
+    global _scan_cursor
+    if not catalogue:
+        return {"checked": 0, "repaired": 0, "errors": 0}
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT * FROM public.sk_ingestion_candidates
+            WHERE review_status='pending_supervisor_review'
+              AND candidate_id > :cursor
+            ORDER BY candidate_id LIMIT :limit
+        """), {"cursor": _scan_cursor, "limit": max(1, min(int(limit), 2))}).mappings().all()
+    if not rows:
+        _scan_cursor = ""
+        return {"checked": 0, "repaired": 0, "errors": 0}
+    summary = {"checked": 0, "repaired": 0, "errors": 0}
+    for row in rows:
+        _scan_cursor = row["candidate_id"]
+        summary["checked"] += 1
+        try:
+            summary["repaired"] += int(recover_pending_candidate(dict(row), catalogue))
+        except Exception:
+            summary["errors"] += 1
+            logger.exception("Automatic NCDC source recovery failed for candidate %s", row["candidate_id"])
+    return summary
