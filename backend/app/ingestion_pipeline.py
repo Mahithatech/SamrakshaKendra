@@ -870,6 +870,16 @@ def _run_pipeline_cycle_locked() -> dict[str, Any]:
                 errors.append(f"NCDC metadata rejected ({type(exc).__name__})")
         attempted,extracted,candidates_added,candidates_flagged,pdf_errors = _extract_pending_pdfs(MAX_PDFS_PER_CYCLE)
         errors.extend(pdf_errors)
+        recovery = {"checked": 0, "repaired": 0, "errors": 0}
+        if ncdc_ok and os.getenv("SK_AUTO_SOURCE_RECOVERY_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                from .source_recovery import scan_pending_recovery
+                recovery = scan_pending_recovery(ncdc_items)
+                if recovery["errors"]:
+                    errors.append("Automatic source recovery encountered candidate errors")
+            except Exception:
+                logger.exception("Automatic source recovery scan failed")
+                errors.append("Automatic source recovery scan failed")
         try:
             with SessionLocal() as db:
                 anomalies = _latest_anomalies(db)
@@ -884,7 +894,7 @@ def _run_pipeline_cycle_locked() -> dict[str, Any]:
         summary = {"who_seen":len(who_items),"ncdc_seen":len(ncdc_items),"new_who_documents":new_docs["WHO"],
             "new_ncdc_documents":new_docs["NCDC"],"pdf_attempted":attempted,"pdf_extracted":extracted,
             "candidates_added":candidates_added,"candidates_flagged":candidates_flagged,
-            "anomalies_found":anomaly_count,"errors":errors[:20],
+            "anomalies_found":anomaly_count,"source_recovery":recovery,"errors":errors[:20],
             "note":"Extracted candidates retain source PDF/page traceability and remain quarantined for supervisor review. No automatic promotion occurs."}
         with engine.begin() as conn:
             conn.execute(text("""UPDATE public.sk_ingestion_runs SET status=:status,finished_at=:finished,
