@@ -383,9 +383,63 @@ def parse_candidate_pdf(content: bytes, source_url: str, title: str = "", source
                         return cells[index] if index is not None and index < len(cells) else ""
 
                     excerpt = " | ".join(value for value in cells if value)
+
+                    values = [
+                        cell("state"), cell("district"), cell("disease"),
+                        cell("cases"), cell("deaths"), cell("start"), cell("end")
+                    ]
+
+                    # Recover shifted columns only when the compact row
+                    # contains a complete, recognizable outbreak structure.
+                    record_index = next(
+                        (i for i, value in enumerate(cells)
+                         if re.sub(r"\s+", "", value) == record_id),
+                        None,
+                    )
+
+                    if record_index is not None:
+                        compact = [
+                            value for value in cells[record_index + 1:]
+                            if value.strip()
+                        ]
+
+                        if len(compact) >= 7:
+                            proposed = compact[:7]
+
+                            try:
+                                proposed_cases = parse_count(proposed[3])
+                                proposed_deaths = parse_count(proposed[4])
+                                proposed_start = _date_from_text(proposed[5])
+                                proposed_end = _date_from_text(proposed[6])
+
+                                valid_structure = (
+                                    all(re.search(r"[A-Za-z]", v)
+                                        for v in proposed[:3])
+                                    and proposed_cases is not None
+                                    and proposed_deaths is not None
+                                    and 0 <= proposed_deaths <= proposed_cases
+                                    and proposed_start is not None
+                                    and proposed_end is not None
+                                    and proposed_start <= proposed_end
+                                    and (datetime.fromisoformat(proposed_end) - datetime.fromisoformat(proposed_start)).days <= 14
+                                )
+
+                                original_incomplete = (
+                                    not all(values[:3])
+                                    or not values[3]
+                                    or not values[4]
+                                    or not _date_from_text(values[5])
+                                    or not _date_from_text(values[6])
+                                )
+
+                                if valid_structure and original_incomplete:
+                                    values = proposed
+
+                            except (ValueError, TypeError):
+                                pass
+
                     candidate = make_candidate(
-                        record_id, cell("state"), cell("district"), cell("disease"),
-                        cell("cases"), cell("deaths"), cell("start"), cell("end"),
+                        record_id, *values,
                         excerpt, page_number, "table_cell_extraction",
                     )
                     page_candidates[record_id] = candidate
@@ -643,6 +697,29 @@ def _insert_candidates(candidates: list[dict[str, Any]]) -> tuple[int, int]:
         return 0, 0
     with engine.begin() as conn:
         for c in candidates:
+            record_id = str(c.get("source_record_id") or "").strip().upper()
+
+            if record_id:
+                conn.execute(text("""
+                    SELECT pg_advisory_xact_lock(
+                        hashtext(:record_key)
+                    )
+                """), {"record_key": "ncdc:" + record_id})
+
+                existing = conn.execute(text("""
+                    SELECT candidate_id
+                    FROM public.sk_ingestion_candidates
+                    WHERE UPPER(TRIM(source_record_id)) = :record_id
+                    LIMIT 1
+                """), {"record_id": record_id}).first()
+
+                if existing:
+                    logger.info(
+                        "Existing NCDC outbreak retained: %s",
+                        record_id
+                    )
+                    continue
+
             errors = c.get("validation_errors") or []
             result = conn.execute(text("""
                 INSERT INTO public.sk_ingestion_candidates
